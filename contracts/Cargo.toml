@@ -1,0 +1,22 @@
+[workspace]
+members = [
+  "zk_verifier",
+  "escrow_vault",
+  "order_book",
+  "matching_engine",
+  "settlement",
+]
+resolver = "2"
+
+[workspace.dependencies]
+soroban-sdk = { version = "26.0.1" }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
