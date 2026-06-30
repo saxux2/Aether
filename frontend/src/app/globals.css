@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme tokens (space-separated RGB channels for /alpha support) ────────── */
+:root {
+  /* Light theme */
+  --color-page:     245 244 240;  /* #F5F4F0 */
+  --color-panel:    255 255 255;  /* white   */
+  --color-elevated: 247 246 243;
+  --color-hairline:  17  17  17;  /* black, used at low alpha */
+  --color-fg:        17  17  17;
+  --color-accent:    41  98 255;  /* #2962ff */
+  --color-up:        32 178 108;  /* #20b26c */
+  --color-down:     239  69  74;  /* #ef454a */
+  --foreground-rgb: 17, 17, 17;
+  --background-start-rgb: 245, 244, 240;
+  color-scheme: light;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-start-rgb));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-fg) / 0.2);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-fg) / 0.35);
+}
+
+/* Terminal range slider (TradePanel percentage slider) */
+input[type='range'].terminal-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 2px;
+  border-radius: 1px;
+  background: rgb(var(--color-fg) / 0.14);
+  outline: none;
+}
+input[type='range'].terminal-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgb(var(--color-panel));
+  border: 2px solid rgb(var(--color-accent));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+input[type='range'].terminal-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgb(var(--color-panel));
+  border: 2px solid rgb(var(--color-accent));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+
+/* ─── Landing page (/) animations ──────────────────────────────────────────── */
+.font-pixel {
+  font-family: 'Courier Prime', ui-monospace, monospace;
+}
+
+/* Marquee — capability strip */
+@keyframes marqueeLeft {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-33.333%); }
+}
+@keyframes marqueeRight {
+  from { transform: translateX(-33.333%); }
+  to   { transform: translateX(0); }
+}
