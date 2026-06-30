@@ -1,0 +1,24 @@
+{
+  "name": "zk-dark-pool",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "circuits",
+    "packages/sdk",
+    "relayer",
+    "frontend"
+  ],
+  "scripts": {
+    "build:circuits": "cd circuits && npm run build",
+    "build:contracts": "cd contracts && bash scripts/build.sh",
+    "build:sdk": "cd packages/sdk && npm run build",
+    "build:relayer": "cd relayer && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "dev:relayer": "cd relayer && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "test:circuits": "cd circuits && node scripts/test_circuits.js",
+    "test:contracts": "cd contracts && cargo test",
+    "test:relayer": "cd relayer && npm test",
+    "test:e2e": "node scripts/e2e_test.js"
+  }
+}
