@@ -1,0 +1,18 @@
+{
+  "name": "@zk-dark-pool/circuits",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "bash scripts/compile_circuits.sh",
+    "setup": "bash scripts/setup_ceremony.sh",
+    "export-vkeys": "bash scripts/export_vkeys.sh",
+    "test": "node scripts/test_circuits.js"
+  },
+  "dependencies": {
+    "circomlib": "^2.0.5"
+  },
+  "devDependencies": {
+    "snarkjs": "^0.7.3",
+    "circomlibjs": "^0.1.7"
+  }
+}
