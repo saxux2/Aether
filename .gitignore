@@ -1,0 +1,42 @@
+# Node
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Rust / Cargo
+contracts/target/
+target/
+
+# Circom build artifacts (large files — keep only source + final keys)
+circuits/build/*.ptau
+circuits/build/*_0.zkey
+circuits/build/*.r1cs
+circuits/build/*.sym
+
+# Secrets
+*.secret
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Test output
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
