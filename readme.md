@@ -1,13 +1,22 @@
+<div align="center">
+
+<img width="2880" height="1573" alt="Screenshot from 2026-07-01 16-01-57" src="https://github.com/user-attachments/assets/b3174ee1-7216-4128-8129-cb2769df9625" />
+
+
+
+<img src="https://img.shields.io/badge/Stellar-Soroban-7B2FBE?style=for-the-badge" />
+<img src="https://img.shields.io/badge/Rust-1.70%2B-red?style=for-the-badge" />
+<img src="https://img.shields.io/badge/Next.js-14-black?style=for-the-badge" />
+<img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?style=for-the-badge" />
+<img src="https://img.shields.io/badge/Status-Live%20on%20Testnet-brightgreen?style=for-the-badge" />
+
 # Aether Dark Pool
 
 > **Zero-Knowledge Institutional Dark Pool DEX on Stellar Soroban**
 >
 > XLM/USDC large-block trading where every order is sealed with a Groth16 ZK proof and matched via 60-second batch auctions — front-running is mathematically impossible.
 
-[![CI](https://github.com/anindha-biswas/aether/actions/workflows/ci.yml/badge.svg)](https://github.com/anindha-biswas/aether/actions/workflows/ci.yml)
-[![Deploy](https://github.com/anindha-biswas/aether/actions/workflows/deploy.yml/badge.svg)](https://github.com/anindha-biswas/aether/actions/workflows/deploy.yml)
-[![Tests: 32 passing](https://img.shields.io/badge/tests-32%20passing-brightgreen)](#test-output)
-[![Network: Testnet](https://img.shields.io/badge/network-Stellar%20Testnet-blue)](https://stellar.expert/explorer/testnet)
+</div>
 
 ---
 
@@ -15,8 +24,8 @@
 
 | Surface | URL |
 |---|---|
-| **Frontend (Vercel)** | https://aether-dark-pool.vercel.app |
-| **Relayer API** | https://aether-relayer.railway.app |
+| **Frontend (Vercel)** | https://aether-frontend-ivory.vercel.app/ |
+| **Relayer API** | https://aether-w5p8.onrender.com |
 | **Stellar Expert** | https://stellar.expert/explorer/testnet |
 
 ---
