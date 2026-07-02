@@ -45,6 +45,22 @@ function EmptyState({ title, subtitle }: { title: string; subtitle?: string }) {
   );
 }
 
+function ErrorState({ title, onRetry }: { title: string; onRetry: () => void }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-1 py-6">
+      <p className="text-xs text-down">{title}</p>
+      <p className="text-[11px] text-fg/30">The relayer may be unreachable or waking up</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-1 text-[11px] text-accent hover:underline"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 const OPEN_GRID =
   'grid grid-cols-[80px_50px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.1fr)_80px_60px_80px_60px] items-center gap-2 px-3';
 const HISTORY_GRID =
@@ -54,7 +70,7 @@ const TRADES_GRID =
 
 export function OrdersStrip() {
   const { orders, cancelOrder, isCancelling } = useOrders();
-  const { trades } = useOrderBook();
+  const { trades, tradesError, refetchTrades } = useOrderBook();
   const [tab, setTab] = useState<Tab>('open');
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
@@ -266,7 +282,9 @@ export function OrdersStrip() {
             <span className="text-right">Settled</span>
             <span className="text-right">Tx</span>
           </div>
-          {trades.length === 0 ? (
+          {tradesError ? (
+            <ErrorState title="Failed to load trades" onRetry={() => refetchTrades()} />
+          ) : trades.length === 0 ? (
             <EmptyState title="No settled trades yet" />
           ) : (
             trades.map((t, i) => {

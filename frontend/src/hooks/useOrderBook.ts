@@ -195,5 +195,7 @@ export function useOrderBook() {
     isLoadingTrades: tradesQuery.isLoading,
     depthError: depthQuery.error,
     tradesError: tradesQuery.error,
+    refetchDepth: depthQuery.refetch,
+    refetchTrades: tradesQuery.refetch,
   };
 }
