@@ -104,67 +104,70 @@ export function OrdersStrip() {
 
       {/* Open Orders */}
       {tab === 'open' && (
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <div
-            className={`${OPEN_GRID} sticky top-0 z-10 border-b border-hairline/10 bg-panel py-1.5 text-[11px] text-fg/40`}
-          >
-            <span>Pair</span>
-            <span>Side</span>
-            <span className="text-right">Price</span>
-            <span className="text-right">Qty (XLM)</span>
-            <span className="text-right">Order Value (USDC)</span>
-            <span>Status</span>
-            <span className="text-right">Batch</span>
-            <span className="text-right">Time</span>
-            <span className="text-right" />
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+          <div className="min-w-[760px]">
+            <div
+              className={`${OPEN_GRID} sticky top-0 z-10 border-b border-hairline/10 bg-panel py-1.5 text-[11px] text-fg/40`}
+            >
+              <span>Pair</span>
+              <span>Side</span>
+              <span className="text-right">Price</span>
+              <span className="text-right">Qty (XLM)</span>
+              <span className="text-right">Order Value (USDC)</span>
+              <span>Status</span>
+              <span className="text-right">Batch</span>
+              <span className="text-right">Time</span>
+              <span className="text-right" />
+            </div>
+            {openOrders.length === 0 ? (
+              <EmptyState title="No open orders" subtitle="Sealed orders you place appear here" />
+            ) : (
+              openOrders.map((o) => {
+                const qty = orderQty(o);
+                const px = orderPrice(o);
+                const rowCancelling = cancellingId === o.id && isCancelling;
+                return (
+                  <div key={o.id} className={`${OPEN_GRID} py-1.5 text-xs hover:bg-fg/[0.05]`}>
+                    <span className="text-fg/55">XLM/USDC</span>
+                    <span className={o.direction === 'buy' ? 'text-up' : 'text-down'}>
+                      {o.direction === 'buy' ? 'Buy' : 'Sell'}
+                    </span>
+                    <span className="text-right font-mono tabular-nums text-fg/70">
+                      {px.toFixed(4)}
+                    </span>
+                    <span className="text-right font-mono tabular-nums text-fg/70">
+                      {qty.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                    </span>
+                    <span className="text-right font-mono tabular-nums text-fg/70">
+                      {(qty * px).toFixed(2)}
+                    </span>
+                    <span className={`capitalize ${openStatusClass(o.status)}`}>{o.status}</span>
+                    <span className="text-right font-mono tabular-nums text-fg/45">
+                      {o.batchId ?? '—'}
+                    </span>
+                    <span className="text-right font-mono tabular-nums text-fg/45">
+                      {timeHMS(o.createdAt)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCancel(o.id)}
+                      disabled={rowCancelling}
+                      className="text-right text-[11px] text-fg/40 transition-colors hover:text-down disabled:opacity-50"
+                    >
+                      {rowCancelling ? 'Cancelling…' : 'Cancel'}
+                    </button>
+                  </div>
+                );
+              })
+            )}
           </div>
-          {openOrders.length === 0 ? (
-            <EmptyState title="No open orders" subtitle="Sealed orders you place appear here" />
-          ) : (
-            openOrders.map((o) => {
-              const qty = orderQty(o);
-              const px = orderPrice(o);
-              const rowCancelling = cancellingId === o.id && isCancelling;
-              return (
-                <div key={o.id} className={`${OPEN_GRID} py-1.5 text-xs hover:bg-fg/[0.05]`}>
-                  <span className="text-fg/55">XLM/USDC</span>
-                  <span className={o.direction === 'buy' ? 'text-up' : 'text-down'}>
-                    {o.direction === 'buy' ? 'Buy' : 'Sell'}
-                  </span>
-                  <span className="text-right font-mono tabular-nums text-fg/70">
-                    {px.toFixed(4)}
-                  </span>
-                  <span className="text-right font-mono tabular-nums text-fg/70">
-                    {qty.toLocaleString('en-US', { maximumFractionDigits: 2 })}
-                  </span>
-                  <span className="text-right font-mono tabular-nums text-fg/70">
-                    {(qty * px).toFixed(2)}
-                  </span>
-                  <span className={`capitalize ${openStatusClass(o.status)}`}>{o.status}</span>
-                  <span className="text-right font-mono tabular-nums text-fg/45">
-                    {o.batchId ?? '—'}
-                  </span>
-                  <span className="text-right font-mono tabular-nums text-fg/45">
-                    {timeHMS(o.createdAt)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleCancel(o.id)}
-                    disabled={rowCancelling}
-                    className="text-right text-[11px] text-fg/40 transition-colors hover:text-down disabled:opacity-50"
-                  >
-                    {rowCancelling ? 'Cancelling…' : 'Cancel'}
-                  </button>
-                </div>
-              );
-            })
-          )}
         </div>
       )}
 
       {/* Order History */}
       {tab === 'history' && (
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+          <div className="min-w-[700px]">
           <div
             className={`${HISTORY_GRID} sticky top-0 z-10 border-b border-hairline/10 bg-panel py-1.5 text-[11px] text-fg/40`}
           >
@@ -244,12 +247,14 @@ export function OrdersStrip() {
               );
             })
           )}
+          </div>
         </div>
       )}
 
       {/* Trade History (market-wide settled tape) */}
       {tab === 'trades' && (
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+          <div className="min-w-[620px]">
           <div
             className={`${TRADES_GRID} sticky top-0 z-10 border-b border-hairline/10 bg-panel py-1.5 text-[11px] text-fg/40`}
           >
@@ -309,6 +314,7 @@ export function OrdersStrip() {
               );
             })
           )}
+          </div>
         </div>
       )}
     </div>

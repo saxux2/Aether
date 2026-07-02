@@ -4,8 +4,13 @@ import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
 import { useWallet } from '@/hooks/useWallet';
 import { useTraderOrders, type ApiOrder } from '@/hooks/useTraderOrders';
+import { useIsMobile } from '@/hooks/useIsMobile';
+import { useOrdersStore } from '@/store/ordersSlice';
 import { relativeTime, shortAddress, statusColor } from '@/utils/format';
 import { STELLAR_HORIZON_URL } from '@/utils/constants';
+import { mergeOrders } from '@/utils/mergeOrders';
+import { MobileCard } from '@/components/mobile/MobileCard';
+import { OrderList } from '@/components/mobile/OrderList';
 
 interface HorizonBalance {
   asset_type: string;
@@ -103,7 +108,9 @@ function SectionHeader({ title, count }: { title: string; count?: number }) {
 }
 
 export default function PortfolioPage() {
+  const isMobile = useIsMobile();
   const { connected, address } = useWallet();
+  const localOrders = useOrdersStore((s) => s.orders);
 
   const { data: horizonData, isLoading: horizonLoading } = useQuery<HorizonAccount>({
     queryKey: ['horizon-account', address],
@@ -144,6 +151,8 @@ export default function PortfolioPage() {
       new Date(a.settled_at ?? a.submitted_at).getTime()
   );
 
+  if (isMobile === null) return null;
+
   if (!connected) {
     return (
       <div className="w-full flex flex-col items-center justify-center min-h-[60vh] gap-4">
@@ -159,6 +168,116 @@ export default function PortfolioPage() {
             Connect your Freighter wallet to view balances, trading history, and open orders.
           </p>
         </div>
+      </div>
+    );
+  }
+
+  if (isMobile) {
+    const { live: mobileLive, settled: mobileSettled } = mergeOrders(apiOrders, localOrders);
+    return (
+      <div className="w-full flex flex-col gap-3 pb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-light tracking-tight text-fg" style={{ fontFamily: '"IBM Plex Sans", sans-serif' }}>Portfolio</h1>
+            {address && <p className="text-fg/40 text-xs font-mono mt-0.5">{shortAddress(address)}</p>}
+          </div>
+          {(horizonLoading || ordersLoading) && (
+            <span className="text-xs text-fg/40 flex items-center gap-1.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+              Syncing
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard
+            label="XLM Balance"
+            value={xlmBalance ? `${parseFloat(xlmBalance).toLocaleString('en-US', { maximumFractionDigits: 4 })} XLM` : '—'}
+            loading={horizonLoading && !xlmBalance}
+          />
+          <StatCard
+            label="USDC Balance"
+            value={usdcBalance ? `$${fmt2(parseFloat(usdcBalance))}` : '—'}
+            loading={horizonLoading && !usdcBalance}
+          />
+          <StatCard label="Settled Trades" value={ordersLoading ? '…' : String(settled.length)} loading={ordersLoading} accent="blue" />
+          <StatCard
+            label="Active Orders"
+            value={ordersLoading ? '…' : String(active.length)}
+            loading={ordersLoading}
+            accent={active.length > 0 ? 'blue' : 'neutral'}
+          />
+        </div>
+
+        <MobileCard>
+          <SectionHeader title="Holdings" />
+          <div className="flex flex-col divide-y divide-hairline/10">
+            <div className="flex items-center justify-between py-3">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-fg/[0.06] border border-hairline/15 flex items-center justify-center text-xs font-bold text-fg">XLM</div>
+                <div>
+                  <p className="text-sm font-medium text-fg">Stellar Lumens</p>
+                  <p className="text-xs text-fg/40">Native</p>
+                </div>
+              </div>
+              {horizonLoading && !xlmBalance ? (
+                <SkeletonText w="w-24" />
+              ) : (
+                <p className="text-sm font-semibold font-mono text-fg">{xlmBalance ? `${parseFloat(xlmBalance).toLocaleString('en-US', { maximumFractionDigits: 7 })} XLM` : '— XLM'}</p>
+              )}
+            </div>
+            <div className="flex items-center justify-between py-3">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-fg/[0.06] border border-hairline/15 flex items-center justify-center text-xs font-bold text-fg">USDC</div>
+                <div>
+                  <p className="text-sm font-medium text-fg">USD Coin</p>
+                  <p className="text-xs text-fg/40">Stellar / Circle</p>
+                </div>
+              </div>
+              {horizonLoading && !usdcBalance ? (
+                <SkeletonText w="w-24" />
+              ) : (
+                <p className="text-sm font-semibold font-mono text-fg">{usdcBalance ? `$${fmt2(parseFloat(usdcBalance))} USDC` : 'No trustline'}</p>
+              )}
+            </div>
+          </div>
+        </MobileCard>
+
+        <MobileCard>
+          <SectionHeader title="Trading Summary" />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <p className="text-xs text-fg/45">XLM Bought</p>
+              <p className="text-sm font-semibold font-mono text-up">+{fmt7(totalXlmBought)} XLM</p>
+            </div>
+            <div className="flex flex-col gap-1">
+              <p className="text-xs text-fg/45">XLM Sold</p>
+              <p className="text-sm font-semibold font-mono text-down">-{fmt7(totalXlmSold)} XLM</p>
+            </div>
+            <div className="flex flex-col gap-1">
+              <p className="text-xs text-fg/45">USDC Spent</p>
+              <p className="text-sm font-semibold font-mono text-down">-${fmt2(totalUsdcSpent)}</p>
+            </div>
+            <div className="flex flex-col gap-1">
+              <p className="text-xs text-fg/45">USDC Received</p>
+              <p className="text-sm font-semibold font-mono text-up">+${fmt2(totalUsdcReceived)}</p>
+            </div>
+          </div>
+        </MobileCard>
+
+        <MobileCard noPadding>
+          <div className="px-4 pt-4">
+            <SectionHeader title="Settled Trades" count={settled.length} />
+          </div>
+          <OrderList orders={mobileSettled} emptyMessage="No settled trades yet." />
+        </MobileCard>
+
+        <MobileCard noPadding>
+          <div className="px-4 pt-4">
+            <SectionHeader title="Open Orders" count={active.length} />
+          </div>
+          <OrderList orders={mobileLive} emptyMessage="No active orders." />
+        </MobileCard>
       </div>
     );
   }
@@ -388,7 +507,7 @@ export default function PortfolioPage() {
               const price = apiOrderFillPrice(o);
               const qty = apiOrderQtyNum(o);
               return (
-                <div key={o.commitment} className="flex items-center gap-4 py-2.5 hover:bg-fg/[0.05] transition-colors rounded-sm">
+                <div key={o.commitment} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5 hover:bg-fg/[0.05] transition-colors rounded-sm">
                   <span
                     className={`text-xs font-semibold w-8 shrink-0 ${
                       isBuy ? 'text-up' : 'text-down'
@@ -405,7 +524,7 @@ export default function PortfolioPage() {
                   <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${statusColor(o.status)}`}>
                     {o.status}
                   </span>
-                  <span className="text-xs text-fg/40 ml-auto shrink-0">
+                  <span className="text-xs text-fg/40 sm:ml-auto shrink-0">
                     {relativeTime(o.submitted_at)}
                   </span>
                 </div>

@@ -1,13 +1,14 @@
 'use client';
 
-import { useTraderOrders, type ApiOrder } from '@/hooks/useTraderOrders';
+import { useTraderOrders } from '@/hooks/useTraderOrders';
 import { useWallet } from '@/hooks/useWallet';
 import { useOrders } from '@/hooks/useOrders';
 import { useOrdersStore } from '@/store/ordersSlice';
-import { shortAddress } from '@/utils/format';
-
-const LIVE_STATUSES = new Set(['active', 'matched']);
-const SETTLED_STATUSES = new Set(['settled', 'expired', 'cancelled']);
+import { useIsMobile } from '@/hooks/useIsMobile';
+import { shortAddress, formatDateTime } from '@/utils/format';
+import { mergeOrders, type MergedOrder } from '@/utils/mergeOrders';
+import { MobileCard } from '@/components/mobile/MobileCard';
+import { OrderList } from '@/components/mobile/OrderList';
 
 function shortTx(hash: string): string {
   return hash.slice(0, 6) + '…' + hash.slice(-4);
@@ -25,68 +26,6 @@ function statusBadge(status: string) {
   if (status === 'cancelled')
     return <span className="text-fg/40 text-xs font-medium uppercase tracking-wide">Cancelled</span>;
   return <span className="text-fg/45 text-xs font-medium uppercase tracking-wide">{status}</span>;
-}
-
-function apiOrderQty(o: ApiOrder): string {
-  // Show the FILLED amount once settled (partial fills trade less than ordered).
-  const filled = parseFloat(o.filled_xlm ?? '0');
-  if (o.status === 'settled' && filled > 0) return o.filled_xlm;
-  return o.xlm_amount;
-}
-
-function apiOrderPrice(o: ApiOrder): string {
-  return o.settlement_price ?? (Number(o.revealed_price) / 1e6).toFixed(4);
-}
-
-function apiOrderValue(o: ApiOrder): string {
-  if (o.usdc_amount) return o.usdc_amount;
-  const qty = parseFloat(apiOrderQty(o));
-  const px = Number(o.revealed_price) / 1e6;
-  return (qty * px).toFixed(2);
-}
-
-function formatTime(iso?: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-interface MergedOrder {
-  commitment: string;
-  direction: 'buy' | 'sell';
-  status: string;
-  price: string;
-  qty: string;
-  value: string;
-  batchId: number | null;
-  timeLabel: string;
-  settlementTxHash: string | null;
-  isLive: boolean;
-  isPartial: boolean;
-  refundedXlm: string | null;
-}
-
-function toMergedFromApi(o: ApiOrder, forLive: boolean): MergedOrder {
-  const refunded = parseFloat(o.refunded_xlm ?? '0');
-  return {
-    commitment: o.commitment,
-    direction: o.direction,
-    status: o.status,
-    price: apiOrderPrice(o),
-    qty: apiOrderQty(o),
-    value: apiOrderValue(o),
-    batchId: o.batch_id ?? null,
-    timeLabel: forLive ? formatTime(o.submitted_at) : formatTime(o.settled_at),
-    settlementTxHash: o.settlement_tx_hash,
-    isLive: forLive,
-    isPartial: o.is_partial,
-    refundedXlm: o.is_partial && refunded > 0 ? o.refunded_xlm : null,
-  };
 }
 
 function SkeletonRow() {
@@ -183,7 +122,7 @@ function OrderTable({ orders, showCancel, cancelOrder, isCancelling, emptyMessag
                   {order.batchId != null ? `#${order.batchId}` : '—'}
                 </td>
                 <td className="px-4 py-3 text-fg/45 text-xs whitespace-nowrap">
-                  {order.timeLabel}
+                  {formatDateTime(order.timeIso)}
                 </td>
                 {showCancel ? (
                   <td className="px-4 py-3 text-center">
@@ -225,16 +164,19 @@ function OrderTable({ orders, showCancel, cancelOrder, isCancelling, emptyMessag
 }
 
 export default function OrdersPage() {
+  const isMobile = useIsMobile();
   const { connected, address } = useWallet();
   const { cancelOrder, isCancelling } = useOrders();
   const localOrders = useOrdersStore((s) => s.orders);
 
   const { data: apiOrders, isLoading } = useTraderOrders(address, connected);
 
+  if (isMobile === null) return null;
+
   if (!connected) {
     return (
       <div className="w-full flex flex-col gap-6">
-        <h1 className="text-3xl font-light tracking-tight text-fg" style={{ fontFamily: '"IBM Plex Sans", sans-serif' }}>My Orders</h1>
+        <h1 className="text-2xl sm:text-3xl font-light tracking-tight text-fg" style={{ fontFamily: '"IBM Plex Sans", sans-serif' }}>My Orders</h1>
         <div className="bg-panel border border-hairline/10 rounded-lg p-12 text-center">
           <p className="text-fg/45 text-sm mb-1">No wallet connected</p>
           <p className="text-fg/30 text-xs">Connect your Stellar wallet to view and manage your orders.</p>
@@ -243,50 +185,52 @@ export default function OrdersPage() {
     );
   }
 
-  const apiByCommitment = new Map<string, ApiOrder>(
-    (apiOrders ?? []).map((o) => [o.commitment, o])
-  );
+  const { live: mergedLive, settled: mergedSettled } = mergeOrders(apiOrders, localOrders);
 
-  const localOnlyCommitments = new Set(
-    localOrders
-      .map((o) => o.commitment)
-      .filter((c) => !apiByCommitment.has(c))
-  );
+  if (isMobile) {
+    return (
+      <div className="w-full flex flex-col gap-3 pb-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-light tracking-tight text-fg" style={{ fontFamily: '"IBM Plex Sans", sans-serif' }}>My Orders</h1>
+          {address && (
+            <span className="text-fg/45 text-xs font-mono bg-panel border border-hairline/10 rounded px-2.5 py-1">
+              {shortAddress(address)}
+            </span>
+          )}
+        </div>
 
-  const mergedLive: MergedOrder[] = [];
-  const mergedSettled: MergedOrder[] = [];
+        <MobileCard noPadding>
+          <div className="flex items-center gap-2 border-b border-hairline/10 px-4 py-3">
+            <h2 className="text-sm font-semibold text-fg">Live Orders</h2>
+            {!isLoading && mergedLive.length > 0 && (
+              <span className="text-xs bg-accent/10 text-accent border border-accent/20 rounded-full px-2 py-0.5 font-medium">
+                {mergedLive.length}
+              </span>
+            )}
+          </div>
+          <OrderList
+            orders={mergedLive}
+            showCancel
+            cancelOrder={cancelOrder}
+            isCancelling={isCancelling}
+            emptyMessage="No live orders."
+            emptySubtitle="Head to Trade to place an order."
+          />
+        </MobileCard>
 
-  for (const o of apiOrders ?? []) {
-    const merged = toMergedFromApi(o, LIVE_STATUSES.has(o.status));
-    if (LIVE_STATUSES.has(o.status)) {
-      mergedLive.push(merged);
-    } else if (SETTLED_STATUSES.has(o.status)) {
-      mergedSettled.push(merged);
-    }
-  }
-
-  for (const lo of localOrders) {
-    if (!localOnlyCommitments.has(lo.commitment)) continue;
-    const isLive = LIVE_STATUSES.has(lo.status);
-    const merged: MergedOrder = {
-      commitment: lo.commitment,
-      direction: lo.direction,
-      status: lo.status,
-      price: lo.settlementPrice ?? (Number(lo.price) / 1e6).toFixed(4),
-      qty: (Number(lo.quantity) / 1e7).toFixed(2),
-      value: ((Number(lo.quantity) / 1e7) * (Number(lo.price) / 1e6)).toFixed(2),
-      batchId: lo.batchId ?? null,
-      timeLabel: isLive ? formatTime(lo.createdAt) : formatTime(lo.settledAt),
-      settlementTxHash: lo.settlementTxHash ?? null,
-      isLive,
-      isPartial: lo.isPartial ?? false,
-      refundedXlm: lo.isPartial && lo.refundedXlm ? lo.refundedXlm : null,
-    };
-    if (isLive) {
-      mergedLive.push(merged);
-    } else if (SETTLED_STATUSES.has(lo.status)) {
-      mergedSettled.push(merged);
-    }
+        <MobileCard noPadding>
+          <div className="flex items-center gap-2 border-b border-hairline/10 px-4 py-3">
+            <h2 className="text-sm font-semibold text-fg">Settled Orders</h2>
+            {!isLoading && mergedSettled.length > 0 && (
+              <span className="text-xs bg-fg/[0.06] text-fg/45 border border-hairline/15 rounded-full px-2 py-0.5 font-medium">
+                {mergedSettled.length}
+              </span>
+            )}
+          </div>
+          <OrderList orders={mergedSettled} emptyMessage="No settled orders yet." />
+        </MobileCard>
+      </div>
+    );
   }
 
   return (

@@ -31,6 +31,19 @@ export function shortHash(hash: string): string {
   return `${hash.slice(0, 8)}...${hash.slice(-4)}`;
 }
 
+/** Format an ISO timestamp as "Jan 5, 2:32 PM"; "—" if absent. */
+export function formatDateTime(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 /** Format a timestamp to a readable relative string. */
 export function relativeTime(date: string | Date): string {
   const d = typeof date === 'string' ? new Date(date) : date;
