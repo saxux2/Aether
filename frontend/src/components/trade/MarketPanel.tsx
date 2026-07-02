@@ -77,10 +77,26 @@ function SideFiller({ label }: { label: string }) {
   );
 }
 
+function ErrorFiller({ label, onRetry }: { label: string; onRetry: () => void }) {
+  return (
+    <div className="flex-1 py-12 text-center">
+      <p className="text-sm text-down">{label}</p>
+      <p className="mt-1 text-[11px] text-fg/30">The relayer may be unreachable or waking up</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-3 text-[11px] text-accent hover:underline"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 /* ----------------------------- order book tab ---------------------------- */
 
 function OrderBookTab() {
-  const { depth, trades, isLoadingDepth } = useOrderBook();
+  const { depth, trades, isLoadingDepth, depthError, refetchDepth } = useOrderBook();
 
   if (isLoadingDepth) {
     return (
@@ -88,6 +104,10 @@ function OrderBookTab() {
         Loading order book…
       </div>
     );
+  }
+
+  if (depthError) {
+    return <ErrorFiller label="Failed to load order book" onRetry={() => refetchDepth()} />;
   }
 
   const bids = depth?.bids.slice(0, MAX_ROWS) ?? []; // highest first
@@ -247,7 +267,7 @@ function TradeRow({ trade }: { trade: SettledTrade }) {
 }
 
 function RecentTradesTab() {
-  const { trades, isLoadingTrades } = useOrderBook();
+  const { trades, isLoadingTrades, tradesError, refetchTrades } = useOrderBook();
 
   if (isLoadingTrades) {
     return (
@@ -255,6 +275,10 @@ function RecentTradesTab() {
         Loading trades…
       </div>
     );
+  }
+
+  if (tradesError) {
+    return <ErrorFiller label="Failed to load recent trades" onRetry={() => refetchTrades()} />;
   }
 
   return (
