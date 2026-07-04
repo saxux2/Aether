@@ -6,7 +6,7 @@ import { Providers } from './providers';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Aether — ZK Dark Pool DEX',
+  title: 'Aether',
   description: 'Zero-knowledge limit order book for XLM/USDC on Stellar Soroban',
 };
 
