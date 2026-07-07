@@ -26,6 +26,13 @@ export const XLM_TOKEN_ADDRESS =
 export const USDC_TOKEN_ADDRESS =
   process.env.NEXT_PUBLIC_USDC_TOKEN_ADDRESS ?? '';
 
+// Classic Stellar issuer account behind the USDC SAC above (Circle testnet USDC).
+// Horizon balances are keyed by asset_code + asset_issuer — a wallet can hold
+// unrelated trustlines that share the "USDC" code from a different issuer, so
+// any balance lookup must filter on both, not asset_code alone.
+export const USDC_ISSUER =
+  process.env.NEXT_PUBLIC_USDC_ISSUER ?? 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+
 // Internal scaling
 export const XLM_SCALE = 10_000_000n;    // 1 XLM = 10^7 stroops
 export const PRICE_SCALE = 1_000_000n;   // 1 USDC = 10^6 micro-USDC

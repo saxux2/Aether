@@ -17,11 +17,13 @@ import {
   XLM_SCALE,
   PRICE_SCALE,
   STELLAR_HORIZON_URL,
+  USDC_ISSUER,
 } from '@/utils/constants';
 
 interface HorizonBalanceEntry {
   asset_type?: string;
   asset_code?: string;
+  asset_issuer?: string;
   balance?: string;
 }
 
@@ -49,7 +51,7 @@ function useAccountBalances(address: string | null, connected: boolean) {
           const amount = Number(b.balance ?? 0);
           if (!Number.isFinite(amount)) continue;
           if (b.asset_type === 'native') xlm = amount;
-          else if (b.asset_code === 'USDC') usdc = amount;
+          else if (b.asset_code === 'USDC' && b.asset_issuer === USDC_ISSUER) usdc = amount;
         }
         return { xlm, usdc };
       } catch {
