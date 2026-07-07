@@ -49,7 +49,7 @@ export function randomFieldElement(): bigint {
     globalThis.crypto.getRandomValues(bytes);
   } else {
     // Node.js < 19 fallback
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const nodeCrypto = require('crypto') as typeof import('crypto');
     nodeCrypto.randomFillSync(bytes);
   }

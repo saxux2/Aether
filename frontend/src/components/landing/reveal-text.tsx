@@ -58,7 +58,7 @@ export function RevealText({
   const totalWords = words.filter(w => w.word !== "\n").length
 
   return (
-    // @ts-ignore — dynamic tag
+    // @ts-expect-error — dynamic tag
     <Tag ref={ref} className={className} style={{ display: "block", overflow: "hidden" }}>
       {words.map(({ word, index }) => {
         if (word === "\n") return <br key={`br-${index}`} />

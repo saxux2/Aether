@@ -1,11 +1,11 @@
 #![no_std]
 
 mod groth16;
-mod types;
-#[cfg(test)]
-mod test_vector;
 #[cfg(test)]
 mod match_vector;
+#[cfg(test)]
+mod test_vector;
+mod types;
 
 pub use types::{DataKey, Groth16Proof, VerificationKey};
 
@@ -31,7 +31,9 @@ impl ZKVerifier {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::VkOrder, &vk_order);
-        env.storage().instance().set(&DataKey::VkBalance, &vk_balance);
+        env.storage()
+            .instance()
+            .set(&DataKey::VkBalance, &vk_balance);
         env.storage().instance().set(&DataKey::VkRange, &vk_range);
         env.storage().instance().set(&DataKey::VkMatch, &vk_match);
     }
@@ -42,11 +44,7 @@ impl ZKVerifier {
         proof: Groth16Proof,
         public_signals: Vec<BytesN<32>>,
     ) -> bool {
-        let vk: VerificationKey = env
-            .storage()
-            .instance()
-            .get(&DataKey::VkOrder)
-            .unwrap();
+        let vk: VerificationKey = env.storage().instance().get(&DataKey::VkOrder).unwrap();
         groth16::verify_groth16(&env, &proof, &public_signals, &vk)
     }
 
@@ -56,11 +54,7 @@ impl ZKVerifier {
         proof: Groth16Proof,
         public_signals: Vec<BytesN<32>>,
     ) -> bool {
-        let vk: VerificationKey = env
-            .storage()
-            .instance()
-            .get(&DataKey::VkBalance)
-            .unwrap();
+        let vk: VerificationKey = env.storage().instance().get(&DataKey::VkBalance).unwrap();
         groth16::verify_groth16(&env, &proof, &public_signals, &vk)
     }
 
@@ -70,11 +64,7 @@ impl ZKVerifier {
         proof: Groth16Proof,
         public_signals: Vec<BytesN<32>>,
     ) -> bool {
-        let vk: VerificationKey = env
-            .storage()
-            .instance()
-            .get(&DataKey::VkRange)
-            .unwrap();
+        let vk: VerificationKey = env.storage().instance().get(&DataKey::VkRange).unwrap();
         groth16::verify_groth16(&env, &proof, &public_signals, &vk)
     }
 
@@ -85,11 +75,7 @@ impl ZKVerifier {
         proof: Groth16Proof,
         public_signals: Vec<BytesN<32>>,
     ) -> bool {
-        let vk: VerificationKey = env
-            .storage()
-            .instance()
-            .get(&DataKey::VkMatch)
-            .unwrap();
+        let vk: VerificationKey = env.storage().instance().get(&DataKey::VkMatch).unwrap();
         groth16::verify_groth16(&env, &proof, &public_signals, &vk)
     }
 
@@ -159,7 +145,12 @@ mod tests {
 
     fn match_vk(env: &Env) -> VerificationKey {
         vk_from(
-            env, &mv::M_VK_ALPHA, &mv::M_VK_BETA, &mv::M_VK_GAMMA, &mv::M_VK_DELTA, &mv::M_VK_IC,
+            env,
+            &mv::M_VK_ALPHA,
+            &mv::M_VK_BETA,
+            &mv::M_VK_GAMMA,
+            &mv::M_VK_DELTA,
+            &mv::M_VK_IC,
         )
     }
 

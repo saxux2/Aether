@@ -13,12 +13,7 @@ impl EscrowVault {
     /// One-time initialization.
     /// matching_engine and settlement are the only addresses allowed to
     /// call lock_for_settlement() and release() respectively.
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        matching_engine: Address,
-        settlement: Address,
-    ) {
+    pub fn initialize(env: Env, admin: Address, matching_engine: Address, settlement: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
@@ -56,7 +51,7 @@ impl EscrowVault {
 
         // Pull funds from trader into this vault contract
         let tok = token::Client::new(&env, &asset);
-        tok.transfer(&trader, &env.current_contract_address(), &amount);
+        tok.transfer(&trader, env.current_contract_address(), &amount);
 
         env.storage().persistent().set(
             &DataKey::Deposit(nullifier.clone()),
@@ -189,7 +184,7 @@ impl EscrowVault {
         let tok = token::Client::new(&env, &record.asset);
         tok.transfer(
             &env.current_contract_address(),
-            &record.trader.clone(),
+            record.trader.clone(),
             &record.amount,
         );
 
@@ -200,19 +195,14 @@ impl EscrowVault {
     }
 
     pub fn get_deposit(env: Env, nullifier: BytesN<32>) -> Option<DepositRecord> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Deposit(nullifier))
+        env.storage().persistent().get(&DataKey::Deposit(nullifier))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{
-        testutils::Address as _,
-        Address, BytesN, Env,
-    };
+    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
 
     fn setup_env() -> (Env, Address) {
         let env = Env::default();
@@ -278,14 +268,21 @@ mod tests {
         let token = soroban_sdk::token::TokenClient::new(&env, &token_addr);
         let minter = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
 
-        let trader = Address::generate(&env);      // depositor (e.g. buyer escrowing USDC)
+        let trader = Address::generate(&env); // depositor (e.g. buyer escrowing USDC)
         let counterparty = Address::generate(&env); // recipient (e.g. seller)
 
         // Buyer escrows 100 at their limit price.
         minter.mint(&trader, &100i128);
         let nullifier = BytesN::from_array(&env, &[7u8; 32]);
         let commitment = BytesN::from_array(&env, &[8u8; 32]);
-        client.deposit(&trader, &token_addr, &100i128, &nullifier, &commitment, &u64::MAX);
+        client.deposit(
+            &trader,
+            &token_addr,
+            &100i128,
+            &nullifier,
+            &commitment,
+            &u64::MAX,
+        );
         assert_eq!(token.balance(&trader), 0);
         assert_eq!(token.balance(&contract_id), 100);
 
@@ -293,8 +290,16 @@ mod tests {
 
         // Batch clears cheaper: only 70 owed to the counterparty, 30 refunded.
         client.release(&nullifier, &counterparty, &70i128);
-        assert_eq!(token.balance(&counterparty), 70, "counterparty gets cleared amount");
-        assert_eq!(token.balance(&trader), 30, "depositor refunded the price-improvement surplus");
+        assert_eq!(
+            token.balance(&counterparty),
+            70,
+            "counterparty gets cleared amount"
+        );
+        assert_eq!(
+            token.balance(&trader),
+            30,
+            "depositor refunded the price-improvement surplus"
+        );
         assert_eq!(token.balance(&contract_id), 0, "vault fully drained");
     }
 
@@ -319,7 +324,14 @@ mod tests {
         minter.mint(&trader, &100i128);
         let nullifier = BytesN::from_array(&env, &[9u8; 32]);
         let commitment = BytesN::from_array(&env, &[10u8; 32]);
-        client.deposit(&trader, &token_addr, &100i128, &nullifier, &commitment, &u64::MAX);
+        client.deposit(
+            &trader,
+            &token_addr,
+            &100i128,
+            &nullifier,
+            &commitment,
+            &u64::MAX,
+        );
         client.lock_for_settlement(&nullifier);
 
         // Attempt to release more than was deposited — must panic.

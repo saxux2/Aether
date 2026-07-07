@@ -7,9 +7,7 @@ use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env};
 
 // EscrowVault cross-contract client
 mod escrow_vault {
-    soroban_sdk::contractimport!(
-        file = "../target/wasm32v1-none/release/escrow_vault.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/escrow_vault.wasm");
 }
 
 #[contract]
@@ -35,9 +33,7 @@ impl Settlement {
         env.storage()
             .instance()
             .set(&DataKey::EscrowVault, &escrow_vault);
-        env.storage()
-            .instance()
-            .set(&DataKey::XlmToken, &xlm_token);
+        env.storage().instance().set(&DataKey::XlmToken, &xlm_token);
         env.storage()
             .instance()
             .set(&DataKey::UsdcToken, &usdc_token);
@@ -73,11 +69,7 @@ impl Settlement {
             .unwrap();
         matching_engine.require_auth();
 
-        let escrow_addr: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::EscrowVault)
-            .unwrap();
+        let escrow_addr: Address = env.storage().instance().get(&DataKey::EscrowVault).unwrap();
         let escrow = escrow_vault::Client::new(&env, &escrow_addr);
 
         // Release buyer's USDC → seller receives `usdc_amount` (the cleared cost);

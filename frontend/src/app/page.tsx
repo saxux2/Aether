@@ -339,7 +339,7 @@ export default function LandingPage() {
                 <h3 className="mt-3 text-lg font-light mb-2">Seal an order</h3>
                 <p className="text-xs text-black/45 leading-relaxed mb-4">Commit price and size into a proof your contracts can verify. TypeScript-first.</p>
                 <div className="bg-black/[0.05] rounded-lg border border-black/[0.07] p-3 font-mono text-[11px] text-black/50 leading-relaxed">
-                  <span className="text-black/25">// seal &amp; submit</span><br />
+                  <span className="text-black/25">{'// seal & submit'}</span><br />
                   <span className="text-blue-600/70">sealOrder</span>{"({"}<br />
                   {"  "}<span className="text-amber-700/70">side</span>: <span className="text-green-700/70">&apos;buy&apos;</span>,<br />
                   {"  "}<span className="text-amber-700/70">price</span>: <span className="text-black/35">0.135</span>,<br />

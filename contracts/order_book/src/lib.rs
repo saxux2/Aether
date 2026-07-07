@@ -1,4 +1,9 @@
 #![no_std]
+// submit_order's argument count is dictated by the sealed-order + ZK proof
+// schema (commitment/nullifier/proofs/public signals per contract type), not
+// a refactorable design smell — bundling into a struct would change the
+// on-chain ABI that the relayer and frontend SDK already invoke against.
+#![allow(clippy::too_many_arguments)]
 
 mod types;
 pub use types::{DataKey, Groth16Proof, OrderRecord, OrderStatus};
@@ -8,15 +13,11 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Vec};
 // Cross-contract clients — WASMs compiled before this crate in the build order.
 // See contracts/scripts/build.sh for the correct compilation sequence.
 mod zk_verifier {
-    soroban_sdk::contractimport!(
-        file = "../target/wasm32v1-none/release/zk_verifier.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/zk_verifier.wasm");
 }
 
 mod escrow_vault {
-    soroban_sdk::contractimport!(
-        file = "../target/wasm32v1-none/release/escrow_vault.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/escrow_vault.wasm");
 }
 
 #[contract]
@@ -24,12 +25,7 @@ pub struct OrderBook;
 
 #[contractimpl]
 impl OrderBook {
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        zk_verifier: Address,
-        escrow_vault: Address,
-    ) {
+    pub fn initialize(env: Env, admin: Address, zk_verifier: Address, escrow_vault: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
@@ -40,16 +36,12 @@ impl OrderBook {
         env.storage()
             .instance()
             .set(&DataKey::EscrowVaultAddr, &escrow_vault);
-        env.storage()
-            .instance()
-            .set(&DataKey::OrderCount, &0u64);
+        env.storage().instance().set(&DataKey::OrderCount, &0u64);
         env.storage()
             .instance()
             .set(&DataKey::CurrentBatchId, &0u64);
         let empty: Vec<BytesN<32>> = Vec::new(&env);
-        env.storage()
-            .instance()
-            .set(&DataKey::ActiveOrders, &empty);
+        env.storage().instance().set(&DataKey::ActiveOrders, &empty);
     }
 
     /// Submit a sealed order with three ZK proofs.
@@ -238,9 +230,7 @@ impl OrderBook {
     }
 
     pub fn get_order(env: Env, commitment: BytesN<32>) -> Option<OrderRecord> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Order(commitment))
+        env.storage().persistent().get(&DataKey::Order(commitment))
     }
 
     pub fn get_active_commitments(env: Env) -> Vec<BytesN<32>> {

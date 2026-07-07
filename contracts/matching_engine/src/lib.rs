@@ -1,4 +1,8 @@
 #![no_std]
+// submit_match's argument count mirrors the match-proof public-signal schema
+// (two commitments, two amounts, proof, signals) — bundling into a struct
+// would change the on-chain ABI the relayer already invokes against.
+#![allow(clippy::too_many_arguments)]
 
 mod types;
 pub use types::{DataKey, Groth16Proof};
@@ -7,28 +11,20 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Vec};
 
 // Cross-contract clients — all must be compiled before this crate.
 mod zk_verifier {
-    soroban_sdk::contractimport!(
-        file = "../target/wasm32v1-none/release/zk_verifier.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/zk_verifier.wasm");
 }
 
 mod order_book {
     // order_book.wasm now defines its own Groth16Proof — no re-export needed.
-    soroban_sdk::contractimport!(
-        file = "../target/wasm32v1-none/release/order_book.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/order_book.wasm");
 }
 
 mod escrow_vault {
-    soroban_sdk::contractimport!(
-        file = "../target/wasm32v1-none/release/escrow_vault.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/escrow_vault.wasm");
 }
 
 mod settlement {
-    soroban_sdk::contractimport!(
-        file = "../target/wasm32v1-none/release/settlement.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/settlement.wasm");
 }
 
 #[contract]
@@ -63,18 +59,10 @@ impl MatchingEngine {
         env.storage()
             .instance()
             .set(&DataKey::ZkVerifier, &zk_verifier);
-        env.storage()
-            .instance()
-            .set(&DataKey::Relayer1, &relayer_1);
-        env.storage()
-            .instance()
-            .set(&DataKey::Relayer2, &relayer_2);
-        env.storage()
-            .instance()
-            .set(&DataKey::Relayer3, &relayer_3);
-        env.storage()
-            .instance()
-            .set(&DataKey::MatchCount, &0u64);
+        env.storage().instance().set(&DataKey::Relayer1, &relayer_1);
+        env.storage().instance().set(&DataKey::Relayer2, &relayer_2);
+        env.storage().instance().set(&DataKey::Relayer3, &relayer_3);
+        env.storage().instance().set(&DataKey::MatchCount, &0u64);
     }
 
     /// Validate and settle a matched order pair — trustlessly.
@@ -101,19 +89,11 @@ impl MatchingEngine {
         match_proof: Groth16Proof,
         match_public_signals: Vec<BytesN<32>>,
     ) {
-        let relayer_1: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Relayer1)
-            .unwrap();
+        let relayer_1: Address = env.storage().instance().get(&DataKey::Relayer1).unwrap();
         relayer_1.require_auth();
 
         // 1. Verify the match proof on-chain via the ZKVerifier (real BN254 Groth16).
-        let zk_addr: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::ZkVerifier)
-            .unwrap();
+        let zk_addr: Address = env.storage().instance().get(&DataKey::ZkVerifier).unwrap();
         let zk = zk_verifier::Client::new(&env, &zk_addr);
         let vk_proof = zk_verifier::Groth16Proof {
             pi_a: match_proof.pi_a.clone(),
@@ -142,11 +122,7 @@ impl MatchingEngine {
         // so no separate cross check is needed.
 
         // 4. Fetch orders from OrderBook and verify both are Active
-        let ob_addr: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::OrderBook)
-            .unwrap();
+        let ob_addr: Address = env.storage().instance().get(&DataKey::OrderBook).unwrap();
         let ob = order_book::Client::new(&env, &ob_addr);
 
         let buyer_order = ob
@@ -161,21 +137,13 @@ impl MatchingEngine {
         ob.mark_matched(&seller_commitment);
 
         // 6. Lock both escrow deposits for settlement
-        let escrow_addr: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::EscrowVault)
-            .unwrap();
+        let escrow_addr: Address = env.storage().instance().get(&DataKey::EscrowVault).unwrap();
         let escrow = escrow_vault::Client::new(&env, &escrow_addr);
         escrow.lock_for_settlement(&buyer_order.nullifier);
         escrow.lock_for_settlement(&seller_order.nullifier);
 
         // 7. Execute atomic swap
-        let settlement_addr: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Settlement)
-            .unwrap();
+        let settlement_addr: Address = env.storage().instance().get(&DataKey::Settlement).unwrap();
         let settlement_contract = settlement::Client::new(&env, &settlement_addr);
         settlement_contract.settle(
             &buyer_order.nullifier,
