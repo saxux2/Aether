@@ -905,13 +905,21 @@ const events = await server.getEvents({
 
 > Full-bleed terminal at `/trade` — TickerBar / TradingChart / TradePanel / OrdersStrip
 
-![Trade terminal desktop](docs/screenshots/trade-desktop.png)
+<img width="2880" height="1567" alt="Screenshot from 2026-07-02 22-23-07" src="https://github.com/user-attachments/assets/63a92713-c901-460f-a4e3-f49886df1c51" />
+
 
 ### Mobile Responsive UI
 
 > Stacked single-column layout — all panels accessible via scroll
 
-![Mobile UI](docs/screenshots/trade-mobile.png)
+<div align="center">
+  <img 
+    width="280" 
+    alt="Screenshot from 2026-07-07 18-31-25" 
+    src="https://github.com/user-attachments/assets/636295b2-15dc-495c-89ea-849ebac3c041" 
+  />
+</div>
+
 
 ### CI/CD Pipeline Running
 
@@ -919,19 +927,7 @@ const events = await server.getEvents({
 
 ![CI pipeline](docs/screenshots/ci-pipeline.png)
 
-### Test Output
 
-> 13 frontend unit tests passing (Jest)
-
-![Frontend tests](docs/screenshots/frontend-tests.png)
-
-> 12 relayer matcher tests passing (Jest)
-
-![Relayer tests](docs/screenshots/relayer-tests.png)
-
-> 7 ZKVerifier contract tests passing (cargo test)
-
-![Contract tests](docs/screenshots/contract-tests.png)
 
 ### On-Chain ZK Verification
 
