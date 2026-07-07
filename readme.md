@@ -27,6 +27,7 @@
 | **Frontend (Vercel)** | https://aether-frontend-ivory.vercel.app/ |
 | **Relayer API** | https://aether-w5p8.onrender.com |
 | **Stellar Expert** | https://stellar.expert/explorer/testnet |
+| **Demo Video** | https://youtu.be/QfoVpdBGuak?si=B0NtlL9a9txCRX4r |
 
 ---
 
