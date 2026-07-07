@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Smart Contract CI ──────────────────────────────────────────────────────
+  contracts:
+    name: Smart Contracts (test + build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+          components: clippy, rustfmt
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run contract tests
+        working-directory: contracts
+        run: cargo test --workspace
+
+      - name: Build WASM (wasm32v1-none, release)
+        working-directory: contracts
+        run: cargo build --target wasm32v1-none --release --workspace
+
+      - name: Lint (clippy)
+        working-directory: contracts
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Format check
+        working-directory: contracts
+        run: cargo fmt --all -- --check
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-wasms
+          path: contracts/target/wasm32v1-none/release/*.wasm
+          if-no-files-found: warn
+
+  # ── Frontend CI ────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend (lint + test + build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build SDK
+        run: npm run build:sdk
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run unit tests
+        working-directory: frontend
+        run: npm run test:ci
+
+      - name: Build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_SOROBAN_RPC_URL: https://soroban-testnet.stellar.org
+          NEXT_PUBLIC_STELLAR_NETWORK: testnet
+          NEXT_PUBLIC_ORDER_BOOK_ADDRESS: CBHSOI5QFEG6WVNVGXMIOI4AVL2HWD6O6IQ5YA245HYDW25NBERSNAKP
+          NEXT_PUBLIC_ZK_VERIFIER_ADDRESS: CCACFEJDSARJFCKNI2FLTKSAG3UW4NMQIBJKMRAHKVAN5SYI4AV2YDHG
+          NEXT_PUBLIC_ESCROW_VAULT_ADDRESS: CCQIBBTXXLZQMYUUXINOCCLSI7JY535JWBEG23SUR3YEPL34BJ6O5EJR
+          NEXT_PUBLIC_MATCHING_ENGINE_ADDRESS: CALBAJWC3EFVESRV3NABF6ULYTJ5SMSVTLTRFPIQPX7H2MBBLHAUXNDH
+          NEXT_PUBLIC_SETTLEMENT_ADDRESS: CBMIPVZCCT67UOEMXLFOY4A2EWGECGU74WJQ2COGXQIPW5RS4KEECTO4
+          NEXT_PUBLIC_XLM_TOKEN_ADDRESS: native
+          NEXT_PUBLIC_USDC_TOKEN_ADDRESS: CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA
+          NEXT_PUBLIC_RELAYER_URL: http://localhost:3001
+          NEXT_PUBLIC_STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+        run: npm run build
+
+      - name: Upload Next.js build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-build
+          path: frontend/.next
+          if-no-files-found: warn
+
+  # ── Relayer CI ─────────────────────────────────────────────────────────────
+  relayer:
+    name: Relayer (test + build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run relayer tests
+        working-directory: relayer
+        run: npm test
+
+      - name: Build relayer
+        working-directory: relayer
+        run: npm run build

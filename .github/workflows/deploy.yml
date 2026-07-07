@@ -1,0 +1,104 @@
+name: Deploy
+
+# Manual-only. Contracts are already deployed to testnet with fixed addresses
+# referenced across frontend/relayer/README; auto-redeploying on every push
+# to main would mint new addresses and desync the live app. Vercel and Render
+# already auto-deploy the frontend/relayer on push via their own GitHub App
+# integrations, so this workflow only needs to cover contract redeploys,
+# triggered deliberately.
+on:
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Deploy Smart Contracts ─────────────────────────────────────────────────
+  deploy-contract:
+    name: Deploy Soroban Contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + wasm32v1-none target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-deploy-${{ hashFiles('contracts/Cargo.lock') }}
+
+      - name: Build WASM
+        working-directory: contracts
+        run: cargo build --target wasm32v1-none --release --workspace
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --features opt
+
+      - name: Optimize WASMs
+        working-directory: contracts
+        run: |
+          for wasm in target/wasm32v1-none/release/*.wasm; do
+            echo "Optimizing $wasm"
+            stellar contract optimize --wasm "$wasm"
+          done
+
+      - name: Deploy ZKVerifier
+        working-directory: contracts
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        run: |
+          stellar contract deploy \
+            --wasm target/wasm32v1-none/release/zk_verifier.optimized.wasm \
+            --source "$STELLAR_SECRET_KEY" \
+            --network testnet
+
+      - name: Deploy EscrowVault
+        working-directory: contracts
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        run: |
+          stellar contract deploy \
+            --wasm target/wasm32v1-none/release/escrow_vault.optimized.wasm \
+            --source "$STELLAR_SECRET_KEY" \
+            --network testnet
+
+      - name: Deploy OrderBook
+        working-directory: contracts
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        run: |
+          stellar contract deploy \
+            --wasm target/wasm32v1-none/release/order_book.optimized.wasm \
+            --source "$STELLAR_SECRET_KEY" \
+            --network testnet
+
+      - name: Deploy Settlement
+        working-directory: contracts
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        run: |
+          stellar contract deploy \
+            --wasm target/wasm32v1-none/release/settlement.optimized.wasm \
+            --source "$STELLAR_SECRET_KEY" \
+            --network testnet
+
+      - name: Deploy MatchingEngine
+        working-directory: contracts
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        run: |
+          stellar contract deploy \
+            --wasm target/wasm32v1-none/release/matching_engine.optimized.wasm \
+            --source "$STELLAR_SECRET_KEY" \
+            --network testnet
+
+  # Frontend (Vercel) and relayer (Render) deploy automatically on push via
+  # their own native GitHub App integrations — no Actions job needed here.
