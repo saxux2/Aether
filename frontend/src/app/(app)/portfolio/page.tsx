@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
 import { useWallet } from '@/hooks/useWallet';
@@ -7,14 +8,16 @@ import { useTraderOrders, type ApiOrder } from '@/hooks/useTraderOrders';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useOrdersStore } from '@/store/ordersSlice';
 import { relativeTime, shortAddress, statusColor } from '@/utils/format';
-import { STELLAR_HORIZON_URL } from '@/utils/constants';
+import { STELLAR_HORIZON_URL, USDC_ISSUER } from '@/utils/constants';
 import { mergeOrders } from '@/utils/mergeOrders';
 import { MobileCard } from '@/components/mobile/MobileCard';
 import { OrderList } from '@/components/mobile/OrderList';
+import { SendXlmForm } from '@/components/wallet/SendXlmForm';
 
 interface HorizonBalance {
   asset_type: string;
   asset_code?: string;
+  asset_issuer?: string;
   balance: string;
 }
 
@@ -56,6 +59,15 @@ function apiOrderValueNum(o: ApiOrder): number {
 
 function SkeletonText({ w = 'w-20' }: { w?: string }) {
   return <span className={`inline-block ${w} h-4 bg-fg/[0.06] rounded animate-pulse`} />;
+}
+
+function TokenIcon({ token }: { token: 'XLM' | 'USDC' }) {
+  const src = token === 'XLM' ? '/tokens/xlm.png' : '/tokens/usdc.png';
+  return (
+    <div className="w-8 h-8 shrink-0 rounded-full bg-fg/[0.06] border border-hairline/15 flex items-center justify-center overflow-hidden">
+      <Image src={src} alt={token} width={20} height={20} className="object-contain" />
+    </div>
+  );
 }
 
 function StatCard({
@@ -128,7 +140,9 @@ export default function PortfolioPage() {
   const xlmBalance =
     horizonData?.balances.find((b) => b.asset_type === 'native')?.balance ?? null;
   const usdcBalance =
-    horizonData?.balances.find((b) => b.asset_code === 'USDC')?.balance ?? null;
+    horizonData?.balances.find(
+      (b) => b.asset_code === 'USDC' && b.asset_issuer === USDC_ISSUER
+    )?.balance ?? null;
 
   const orders = apiOrders ?? [];
   // 'settled' includes partial fills (status stays 'settled'; the unfilled
@@ -214,7 +228,7 @@ export default function PortfolioPage() {
           <div className="flex flex-col divide-y divide-hairline/10">
             <div className="flex items-center justify-between py-3">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-fg/[0.06] border border-hairline/15 flex items-center justify-center text-xs font-bold text-fg">XLM</div>
+                <TokenIcon token="XLM" />
                 <div>
                   <p className="text-sm font-medium text-fg">Stellar Lumens</p>
                   <p className="text-xs text-fg/40">Native</p>
@@ -228,7 +242,7 @@ export default function PortfolioPage() {
             </div>
             <div className="flex items-center justify-between py-3">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-fg/[0.06] border border-hairline/15 flex items-center justify-center text-xs font-bold text-fg">USDC</div>
+                <TokenIcon token="USDC" />
                 <div>
                   <p className="text-sm font-medium text-fg">USD Coin</p>
                   <p className="text-xs text-fg/40">Stellar / Circle</p>
@@ -241,6 +255,11 @@ export default function PortfolioPage() {
               )}
             </div>
           </div>
+        </MobileCard>
+
+        <MobileCard>
+          <SectionHeader title="Send XLM" />
+          <SendXlmForm />
         </MobileCard>
 
         <MobileCard>
@@ -331,9 +350,7 @@ export default function PortfolioPage() {
         <div className="flex flex-col divide-y divide-hairline/10">
           <div className="flex items-center justify-between py-3">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-fg/[0.06] border border-hairline/15 flex items-center justify-center text-xs font-bold text-fg">
-                XLM
-              </div>
+              <TokenIcon token="XLM" />
               <div>
                 <p className="text-sm font-medium text-fg">Stellar Lumens</p>
                 <p className="text-xs text-fg/40">Native</p>
@@ -353,9 +370,7 @@ export default function PortfolioPage() {
           </div>
           <div className="flex items-center justify-between py-3">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-fg/[0.06] border border-hairline/15 flex items-center justify-center text-xs font-bold text-fg">
-                USDC
-              </div>
+              <TokenIcon token="USDC" />
               <div>
                 <p className="text-sm font-medium text-fg">USD Coin</p>
                 <p className="text-xs text-fg/40">Stellar / Circle</p>
@@ -372,6 +387,11 @@ export default function PortfolioPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="bg-panel border border-hairline/10 rounded-lg p-5">
+        <SectionHeader title="Send XLM" />
+        <SendXlmForm />
       </div>
 
       <div className="bg-panel border border-hairline/10 rounded-lg p-5">
