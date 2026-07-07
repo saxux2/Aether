@@ -976,22 +976,8 @@ const events = await server.getEvents({
 ### CI/CD Pipeline Running
 
 > GitHub Actions — contracts + frontend + relayer jobs all green
-
-![CI pipeline](docs/screenshots/ci-pipeline.png)
-
-
-
-### On-Chain ZK Verification
-
-> `verify_order_proof` returning `true` on Stellar testnet with real snarkjs proof
-
-![On-chain ZK](docs/screenshots/zk-verified.png)
-
-### Settlement Transaction
-
-> Horizon ledger 3358708 — three `asset_balance_changes`: USDC 67.50 + USDC 2.50 refund + XLM 500
-
-![Settlement tx](docs/screenshots/settlement-tx.png)
+> 
+<img width="2857" height="1116" alt="image" src="https://github.com/user-attachments/assets/51aba39f-e4ea-46f1-bfdf-399a3824866f" />
 
 ---
 
