@@ -52,6 +52,7 @@
 17. [Troubleshooting](#17-troubleshooting)
 18. [Screenshots](#18-screenshots)
 19. [Git History](#19-git-history)
+20. [User Feedback Implementation](#20-user-feedback-implementation)
 
 ---
 
@@ -126,6 +127,57 @@ On any public DEX, a 500k XLM order is visible the moment it hits the mempool. B
 | `packages/sdk` | TypeScript | Client-side proof generation + Soroban tx builder |
 | `relayer/` | TypeScript | Batch auction runner, match prover, order API |
 | `frontend/` | Next.js 15 | Trade terminal, charts, order management |
+
+### Project Structure
+
+```
+aether/
+├── circuits/                     # Circom 2.0 circuits + trusted setup
+│   ├── order_commitment.circom   # Order validity proof (price/size sealed)
+│   ├── balance_proof.circom      # Sufficient-funds proof
+│   ├── range_proof.circom        # Price-bounds proof
+│   ├── match_proof.circom        # Trustless match-validity proof
+│   ├── build/                    # Compiled wasm + zkeys + exported Soroban VKs
+│   └── scripts/                  # compile, trusted setup, VK export
+│
+├── contracts/                    # Soroban contracts — Rust, Cargo workspace
+│   ├── zk_verifier/src/          # On-chain BN254 Groth16 pairing verifier
+│   ├── escrow_vault/src/         # Non-custodial fund lock/release
+│   ├── order_book/src/           # Sealed order commitment storage
+│   ├── matching_engine/src/      # Verifies match_proof, binds signals
+│   ├── settlement/src/           # Atomic XLM/USDC swap
+│   └── scripts/                  # build.sh, deploy.sh, initialize.sh
+│
+├── packages/sdk/src/             # @aether/sdk — shared TS client library
+│   ├── commitment.ts             # Poseidon commitment + nullifier derivation
+│   ├── prover.ts                 # snarkjs witness + proof generation
+│   ├── soroban.ts                # Tx builders, BN254 wire encoding
+│   └── relayer.ts                # Relayer REST client
+│
+├── relayer/src/                  # Node.js batch auction service
+│   ├── db/                       # MongoDB models + queries
+│   ├── routes/                   # Express REST API (orders, orderbook, health)
+│   ├── services/                 # batchAuction, matcher, matchProver, soroban
+│   └── types/
+│
+├── frontend/src/                 # Next.js 15 trading terminal
+│   ├── app/(app)/                # trade, orders, portfolio routes
+│   ├── components/
+│   │   ├── trade/                # TradingChart, TradePanel, OrdersStrip, MarketPanel
+│   │   ├── wallet/               # SendXlmForm, Freighter wallet UI
+│   │   ├── mobile/               # Responsive mobile views
+│   │   └── landing/              # Marketing page sections
+│   ├── hooks/                    # useWallet, useOrders, useProver, useBatch...
+│   ├── lib/                      # stellarWallet.ts, stellarHorizon.ts, sdk/
+│   ├── store/                    # Zustand slices (wallet, orders)
+│   └── utils/                    # constants, format, Stellar helpers
+│
+├── scripts/                      # e2e_test.js, fund_usdc.js, run_e2e.sh
+├── .github/workflows/            # ci.yml (test/build) + deploy.yml (contract → relayer → frontend CD)
+├── contracts/README.md           # Per-contract API reference
+├── TRADER_GUIDE.md               # Order lifecycle, clearing-price math, refund semantics
+└── readme.md                     # This file
+```
 
 ---
 
@@ -964,6 +1016,21 @@ Minimum 10 meaningful commits with logical development progression:
 | 13 | `test(frontend): 13 Jest unit tests for format utilities` | jest.config.js, format.test.ts |
 | 14 | `ci: GitHub Actions CI (contracts + frontend + relayer) and CD (Vercel)` | ci.yml, deploy.yml, contracts/Makefile |
 | 15 | `docs: complete project README, contracts/README.md, TRADER_GUIDE.md` | Full documentation |
+
+---
+
+## 20. User Feedback Implementation
+
+Each row maps a specific issue found while actually using the trade terminal to the fix shipped for it.
+
+| # | User Feedback | Implementation | Commit |
+|---|---|---|---|
+| 1 | Order book depth and recent trades panels render as an empty state when the relayer is slow to wake up or a CORS request fails — visually indistinguishable from "no liquidity yet." Traders can't tell a dead connection from a quiet market. | Added a distinct `ErrorFiller` state to both the `OrderBookTab` and `RecentTradesTab` in `MarketPanel.tsx`, with a retry action, instead of silently collapsing to the same empty-state UI used for zero liquidity. | [`65756ce`](https://github.com/anindhabiswas25/aether/commit/65756ce6172f9af1ba26bceebab1632713279cc8) |
+| 2 | Order History in the trade page footer goes blank on a page refresh, even right after an order has fully settled — it only reflects the current session's in-memory state, not what actually happened on-chain. | Rewired `OrdersStrip` to read from `useTraderOrders` + `mergeOrders` — the same durable, wallet-scoped relayer data source the Portfolio page already used — instead of the resettable Zustand store. | [`5bfbecc`](https://github.com/anindhabiswas25/aether/commit/5bfbecc703c89e83c1587b1fd23f4b3f6dc95911) |
+| 3 | The trade page is unusable on a phone — order book, chart, and order entry panel are all crammed into the desktop three-column layout and require pinch-zooming to tap anything. | Added `MobileTradeView`, `MobileCard`, `OrderList`, and a `useIsMobile` hook; reworked the trade, orders, portfolio pages plus the header/layout to render a proper stacked mobile layout below the breakpoint. | [`879a04f`](https://github.com/anindhabiswas25/aether/commit/879a04f308ed381286ae58414e42492120bab713) |
+| 4 | With several tabs open, the Aether tab is impossible to pick out — it's still the default Next.js icon and a long generic title. | Replaced the favicon with a tightly-cropped Aether glyph on a transparent background and shortened the browser tab title to "Aether." | [`8418b82`](https://github.com/anindhabiswas25/aether/commit/8418b82bdd6082e858ba42f6a8591aa8b892e165) |
+| 5 | Portfolio page shows "0 USDC (no trustline)" for a wallet that actually holds real USDC — balance lookup is grabbing the wrong trustline. | Root cause: Horizon returns every trustline sharing the asset code `"USDC"` regardless of issuer, and the balance lookup matched on `asset_code` alone via `.find()`, silently picking up an unrelated zero-balance trustline instead of the real Circle testnet USDC. Both the portfolio page and `TradePanel` now also check `asset_issuer` against a canonical `USDC_ISSUER` constant. | [`c2d8736`](https://github.com/anindhabiswas25/aether/commit/c2d8736361869b93fdf2986f5044fbb1b9c93028) |
+| 6 | Wallet balance is visible in the app, but there's no way to actually send XLM anywhere without leaving Aether and using Freighter's own extension popup directly. | Added `lib/stellarWallet.ts` (Freighter detect/connect/sign) and `lib/stellarHorizon.ts` (build/submit native payment tx), exposed as `useWallet().sendXlm()` with loading/success/error state, and a `SendXlmForm` with a tx-hash success banner linking to stellar.expert. | [`8716157`](https://github.com/anindhabiswas25/aether/commit/871615749be38758de5b1e5bc35a5acf081ea912) |
 
 ---
 
