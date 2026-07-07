@@ -34,13 +34,17 @@ jobs:
         with:
           workspaces: contracts
 
+      # order_book/settlement/matching_engine use contractimport! to read
+      # other contracts' compiled .wasm off disk — those must exist before
+      # `cargo test`/`cargo build --workspace` touches them, in the specific
+      # dependency order build.sh encodes (not just alphabetical/parallel).
+      - name: Build WASM (wasm32v1-none, release, dependency order)
+        working-directory: contracts
+        run: ./scripts/build.sh
+
       - name: Run contract tests
         working-directory: contracts
         run: cargo test --workspace
-
-      - name: Build WASM (wasm32v1-none, release)
-        working-directory: contracts
-        run: cargo build --target wasm32v1-none --release --workspace
 
       - name: Lint (clippy)
         working-directory: contracts
