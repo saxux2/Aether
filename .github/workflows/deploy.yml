@@ -181,4 +181,4 @@ jobs:
             -b NEXT_PUBLIC_STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org \
             -b NEXT_PUBLIC_XLM_TOKEN_ADDRESS=native \
             -b NEXT_PUBLIC_USDC_TOKEN_ADDRESS=CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA \
-            -b NEXT_PUBLIC_RELAYER_URL="${{ vars.RELAYER_URL || 'http://localhost:3001' }}"
+            -b NEXT_PUBLIC_RELAYER_URL="${{ vars.RELAYER_URL || 'https://aether-w5p8.onrender.com' }}"
