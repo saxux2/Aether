@@ -1,0 +1,39 @@
+name: Keep relayer warm
+
+# Render's free tier spins the relayer down after ~15 min of no traffic, so
+# the next visitor eats a ~30s cold start. This pings the health endpoint every
+# ~10 min to keep the instance awake. GitHub's scheduled runs can lag several
+# minutes under load, so 10m (not 14m) leaves margin under the ~15m sleep window.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  ping:
+    name: Ping relayer health endpoint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Curl /api/health
+        env:
+          RELAYER_URL: ${{ vars.RELAYER_URL || 'https://aether-w5p8.onrender.com' }}
+        run: |
+          set -uo pipefail
+          url="${RELAYER_URL%/}/api/health"
+          echo "==> Pinging $url"
+          # --max-time 60 covers a full cold start; --retry rides out the spin-up.
+          # Any HTTP response means the dyno woke, which is the whole point — so we
+          # only fail on a connection-level error (curl exit != 0), not on a non-2xx.
+          code=$(curl -sS --max-time 60 --retry 3 --retry-all-errors --retry-delay 10 \
+                   -o /tmp/health.json -w '%{http_code}' "$url") || {
+            echo "::error::relayer did not respond (connection error)"
+            exit 1
+          }
+          echo "HTTP $code"
+          cat /tmp/health.json || true
+          echo
+          if [ "$code" -ge 500 ]; then
+            echo "::warning::relayer awake but health is degraded (HTTP $code)"
+          fi
