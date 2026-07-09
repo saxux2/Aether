@@ -44,9 +44,15 @@ const BATCH_POLL_S = parseInt(process.env.BATCH_POLL_TIMEOUT_SECONDS || '120', 1
 // ── Stellar SDK (lazy-loaded only when not in SKIP_CHAIN mode) ────────────────
 const STELLAR_RPC_URL     = process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org';
 const ORDER_BOOK_ADDRESS  = process.env.ORDER_BOOK_ADDRESS || '';
-// RELAYER_SECRET_KEY can be used as the test signer — it is already funded
-const TEST_SECRET_KEY     = process.env.TEST_SECRET_KEY || process.env.RELAYER_SECRET_KEY ||
-                            'SCYWMWFMPTXBRWQXCRHHAVP5C5YOWZI4Z7YPN2ECECCRG24RXHG4HD2P';
+// RELAYER_SECRET_KEY can be used as the test signer — it must be a funded
+// testnet account. No hardcoded fallback: a committed secret key, even a
+// testnet-only one, should be treated as burned the moment it's in source
+// control. Only required in chain mode (SKIP_CHAIN=false).
+const TEST_SECRET_KEY = process.env.TEST_SECRET_KEY || process.env.RELAYER_SECRET_KEY || '';
+if (!SKIP_CHAIN && !TEST_SECRET_KEY) {
+  console.error('ERROR: set TEST_SECRET_KEY or RELAYER_SECRET_KEY to a funded testnet account secret.');
+  process.exit(1);
+}
 // Native XLM SAC address on testnet
 const XLM_SAC_ADDRESS     = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 const USDC_TOKEN_ADDRESS  = process.env.USDC_TOKEN_ADDRESS ||
@@ -172,11 +178,19 @@ let buyCommitment  = null;
 let sellCommitment = null;
 let ordersInDB     = false;
 
+const PRICE_SCALE = 1_000_000n;
+
+/** USDC base units for a buy order, XLM stroops directly for a sell — must
+ * match order_book.rs's amount_to_b32 binding and the frontend's
+ * computeEscrowAmount exactly (see frontend/src/utils/constants.ts). */
+function computeEscrowAmount(direction, quantity, price) {
+  return direction === 0n ? (quantity * price) / PRICE_SCALE : quantity;
+}
+
 // ── Proof generation ──────────────────────────────────────────────────────────
 /**
  * Generate all three Groth16 proofs for a dark pool order.
  *
- * price_salt = salt XOR price  (matches the SDK prover exactly).
  * WASM and zkey files are loaded from CIRCUITS_DIR/*_js/ subdirectories
  * which are the canonical output of `circom --wasm`.
  */
@@ -184,10 +198,9 @@ async function generateProofs(params, label) {
   const { price, quantity, direction, salt, secret, balance, nonce, priceMin, priceMax } = params;
 
   // Derived values
-  const priceSalt       = salt ^ price;              // BigInt bitwise XOR
-  const commitment      = F.toString(poseidon([price, quantity, direction, salt]));
-  const nullifier       = F.toString(poseidon([secret, nonce]));
-  const priceCommitment = F.toString(poseidon([price, priceSalt]));
+  const commitment   = F.toString(poseidon([price, quantity, direction, salt]));
+  const nullifier     = F.toString(poseidon([secret, nonce]));
+  const escrowAmount  = computeEscrowAmount(direction, quantity, price);
 
   const wasmOrder   = path.join(CIRCUITS_DIR, 'order_commitment_js', 'order_commitment.wasm');
   const zkeyOrder   = path.join(CIRCUITS_DIR, 'order_commitment_final.zkey');
@@ -214,31 +227,41 @@ async function generateProofs(params, label) {
 
   // 2. balance_proof circuit
   //    Inputs: secret, balance, quantity, nonce (private); nullifier, minimum_balance (public)
+  //    quantity/minimum_balance are the real escrow amount (escrowAmount),
+  //    NOT the order's XLM-denominated `quantity` — order_book checks
+  //    minimum_balance against the real on-chain amount_in, and for a buy
+  //    order that's USDC, not XLM. See computeEscrowAmount above.
   console.log('    ' + C.grey + '[' + label + '] Generating balance_proof…' + C.reset);
   const { proof: balanceProof, publicSignals: balancePublicSignals } =
     await snarkjs.groth16.fullProve(
       {
         secret:          secret.toString(),
         balance:         balance.toString(),
-        quantity:        quantity.toString(),
+        quantity:        escrowAmount.toString(),
         nonce:           nonce.toString(),
         nullifier,
-        minimum_balance: quantity.toString(),
+        minimum_balance: escrowAmount.toString(),
       },
       wasmBalance, zkeyBalance
     );
 
   // 3. range_proof circuit
-  //    Inputs: price, price_salt (private); price_min, price_max, price_commitment (public)
+  //    Inputs: price, quantity, direction, salt (private, same preimage as
+  //    order_commitment); price_min, price_max, commitment (public). Proves
+  //    the price of THIS specific order (identified by its real commitment)
+  //    is in-band — see circuits/range_proof.circom for why it shares the
+  //    order's preimage instead of a separate, unbound price commitment.
   console.log('    ' + C.grey + '[' + label + '] Generating range_proof…' + C.reset);
   const { proof: rangeProof, publicSignals: rangePublicSignals } =
     await snarkjs.groth16.fullProve(
       {
-        price:            price.toString(),
-        price_salt:       priceSalt.toString(),
-        price_min:        priceMin.toString(),
-        price_max:        priceMax.toString(),
-        price_commitment: priceCommitment,
+        price:      price.toString(),
+        quantity:   quantity.toString(),
+        direction:  direction.toString(),
+        salt:       salt.toString(),
+        price_min:  priceMin.toString(),
+        price_max:  priceMax.toString(),
+        commitment,
       },
       wasmRange, zkeyRange
     );
@@ -249,8 +272,7 @@ async function generateProofs(params, label) {
     rangeProof,   rangePublicSignals,
     commitment,
     nullifier,
-    priceCommitment,
-    priceSalt:    priceSalt.toString(),
+    escrowAmount: escrowAmount.toString(),
     revealedPrice: price.toString(),
     revealedSalt:  salt.toString(),
   };
@@ -493,21 +515,21 @@ async function main() {
       });
 
       // balance_proof circuit: public inputs nullifier (index 0), minimum_balance (index 1)
-      await test('suite1', 'balance_proof public signals: [nullifier, minimum_balance=quantity]', () => {
+      await test('suite1', 'balance_proof public signals: [nullifier, minimum_balance=escrowAmount]', () => {
         assertEq(buyProofs.balancePublicSignals[0], buyProofs.nullifier,
           'balancePublicSignals[0] — nullifier');
-        assertEq(buyProofs.balancePublicSignals[1], BUY_PARAMS.quantity.toString(),
+        assertEq(buyProofs.balancePublicSignals[1], buyProofs.escrowAmount,
           'balancePublicSignals[1] — minimum_balance');
       });
 
-      // range_proof circuit: public inputs price_min (0), price_max (1), price_commitment (2)
-      await test('suite1', 'range_proof public signals: [price_min, price_max, price_commitment]', () => {
+      // range_proof circuit: public inputs price_min (0), price_max (1), commitment (2)
+      await test('suite1', 'range_proof public signals: [price_min, price_max, commitment]', () => {
         assertEq(buyProofs.rangePublicSignals[0], BUY_PARAMS.priceMin.toString(),
           'rangePublicSignals[0] — price_min');
         assertEq(buyProofs.rangePublicSignals[1], BUY_PARAMS.priceMax.toString(),
           'rangePublicSignals[1] — price_max');
-        assertEq(buyProofs.rangePublicSignals[2], buyProofs.priceCommitment,
-          'rangePublicSignals[2] — price_commitment');
+        assertEq(buyProofs.rangePublicSignals[2], buyProofs.commitment,
+          'rangePublicSignals[2] — commitment');
       });
 
       // 1.5 Tamper a byte of pi_a[0] → verify must return false
@@ -857,8 +879,18 @@ async function main() {
 
   // 5.2 Wrong trading pair (BTC) → 400 "Only XLM/USDC pair supported"
   await test('suite5', 'POST /api/orders/submit with asset_in=BTC → 400 "Only XLM/USDC"', async () => {
+    // Needs the other required-string fields present (even as placeholders)
+    // to get past the relayer's upfront shape check and actually reach the
+    // trading-pair validation this test targets.
+    const dummyProof = { pi_a: ['0','0','1'], pi_b: [['0','0'],['0','0'],['1','0']], pi_c: ['0','0','1'], protocol: 'groth16', curve: 'bn128' };
     const res = await apiPost(RELAYER_URL + '/api/orders/submit', {
+      trader_address: 'GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZPVI3FYIJ37GFWEZN4WZ',
       asset_in: 'BTC', asset_out: 'ETH', amount_in: '100000000',
+      commitment: '0', nullifier: '0', revealed_price: '1',
+      order_proof: dummyProof, order_public_signals: ['1', '0'],
+      balance_proof: dummyProof, balance_public_signals: ['0', '0'],
+      range_proof: dummyProof, range_public_signals: ['1000', '10000000', '0'],
+      signed_transaction_xdr: 'MOCK',
     });
     assertHTTP(res, 400, 'wrong pair');
     assert(
@@ -899,17 +931,22 @@ async function main() {
     skipLine('Submit tampered proof to relayer → 400', 'proofs not generated in Suite 1');
   } else {
     await test('suite5', 'POST /api/orders/submit with tampered pi_a → 400 "Invalid ZK proof"', async () => {
-      // Use a fresh nullifier so no duplicate-key short-circuit can occur
-      const badNonce    = RUN_SEED + 7_777_777n;
-      const badNullifier = F.toString(poseidon([BUY_PARAMS.secret, badNonce]));
-
+      // Keep every field self-consistent with buyProofs's own real values —
+      // the relayer now binds commitment/nullifier/amount_in against the
+      // proofs' own public signals before it ever reaches proof
+      // verification, so a mismatched nullifier here would trip that check
+      // first instead of the "Invalid ZK proof" path this test is for.
+      // Reusing buyProofs.nullifier is safe even though Suite 3 already
+      // submitted it for real: the tampered order_proof fails
+      // verifyAllProofs before the relayer ever gets to a DB write, so
+      // there's no duplicate-key path to worry about.
       const res = await apiPost(RELAYER_URL + '/api/orders/submit', {
         trader_address: 'GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZPVI3FYIJ37GFWEZN4WZ',
         asset_in:  'USDC', asset_out: 'XLM',
-        amount_in: '700000000',
+        amount_in: buyProofs.escrowAmount,
         expires_in_seconds: '3600',
         commitment:      buyProofs.commitment,
-        nullifier:       badNullifier,
+        nullifier:       buyProofs.nullifier,
         revealed_price:  buyProofs.revealedPrice,
         revealed_salt:   buyProofs.revealedSalt,
         order_proof:     tamperProof(buyProofs.orderProof),  // <-- tampered
