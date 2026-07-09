@@ -23,4 +23,5 @@ pub enum DataKey {
     Relayer2,
     Relayer3,
     MatchCount,
+    Paused,
 }

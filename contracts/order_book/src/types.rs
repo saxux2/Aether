@@ -15,6 +15,7 @@ pub enum DataKey {
     Admin,
     ZkVerifierAddr,
     EscrowVaultAddr,
+    Paused,
     /// commitment -> OrderRecord
     Order(BytesN<32>),
     /// nullifier -> bool
