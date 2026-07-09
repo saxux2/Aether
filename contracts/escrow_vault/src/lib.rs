@@ -5,6 +5,19 @@ pub use types::{DataKey, DepositRecord, DepositStatus};
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env};
 
+// TTL bookkeeping. Soroban entries (both the contract instance and each
+// persistent key) get archived once their time-to-live runs out, after
+// which reading them requires an off-chain RestoreFootprint operation
+// before any contract call can touch them again. For a fund-custody
+// contract, an *archived* Deposit is not lost — but it's *stuck* until
+// someone notices and restores it, which is a real operational gap for a
+// contract nobody had wired this up for. ~5s average ledger close time.
+const DAY_IN_LEDGERS: u32 = 17_280;
+const INSTANCE_EXTEND_THRESHOLD: u32 = DAY_IN_LEDGERS * 30; // extend once <30 days remain
+const INSTANCE_EXTEND_TO: u32 = DAY_IN_LEDGERS * 60; // extend out to 60 days
+const PERSISTENT_EXTEND_THRESHOLD: u32 = DAY_IN_LEDGERS * 30;
+const PERSISTENT_EXTEND_TO: u32 = DAY_IN_LEDGERS * 60;
+
 #[contract]
 pub struct EscrowVault;
 
@@ -12,8 +25,17 @@ pub struct EscrowVault;
 impl EscrowVault {
     /// One-time initialization.
     /// matching_engine and settlement are the only addresses allowed to
-    /// call lock_for_settlement() and release() respectively.
-    pub fn initialize(env: Env, admin: Address, matching_engine: Address, settlement: Address) {
+    /// call lock_for_settlement() and release() respectively. xlm_token/
+    /// usdc_token are the only assets deposit() will accept — see deposit()
+    /// for why.
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        matching_engine: Address,
+        settlement: Address,
+        xlm_token: Address,
+        usdc_token: Address,
+    ) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
@@ -24,6 +46,13 @@ impl EscrowVault {
         env.storage()
             .instance()
             .set(&DataKey::SettlementAddr, &settlement);
+        env.storage().instance().set(&DataKey::XlmToken, &xlm_token);
+        env.storage()
+            .instance()
+            .set(&DataKey::UsdcToken, &usdc_token);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
     }
 
     /// Lock trader funds alongside order submission.
@@ -40,6 +69,33 @@ impl EscrowVault {
     ) {
         trader.require_auth();
 
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            panic!("deposits paused");
+        }
+
+        // Only the two tokens this pool actually trades may be escrowed.
+        // Without this, deposit() would pull funds using whatever token
+        // contract the caller names — for a legitimate trader that's just
+        // their own funds under an unexpected asset, but it also means
+        // nothing here previously enforced the "buyer escrows USDC / seller
+        // escrows XLM" invariant at the point of deposit (settlement.settle()
+        // independently checks this before release — see settlement's own
+        // asset-binding check — but defense in depth belongs at both ends).
+        let xlm_token: Address = env.storage().instance().get(&DataKey::XlmToken).unwrap();
+        let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
+        if asset != xlm_token && asset != usdc_token {
+            panic!("asset not allowed");
+        }
+
         // Reject duplicate nullifiers — prevents double-spending the same escrow slot
         if env
             .storage()
@@ -53,8 +109,9 @@ impl EscrowVault {
         let tok = token::Client::new(&env, &asset);
         tok.transfer(&trader, env.current_contract_address(), &amount);
 
+        let key = DataKey::Deposit(nullifier.clone());
         env.storage().persistent().set(
-            &DataKey::Deposit(nullifier.clone()),
+            &key,
             &DepositRecord {
                 trader,
                 asset,
@@ -65,6 +122,11 @@ impl EscrowVault {
                 created_at: env.ledger().timestamp(),
                 expires_at,
             },
+        );
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_EXTEND_THRESHOLD,
+            PERSISTENT_EXTEND_TO,
         );
     }
 
@@ -78,10 +140,15 @@ impl EscrowVault {
             .unwrap();
         matching_engine.require_auth();
 
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
+
+        let key = DataKey::Deposit(nullifier);
         let mut record: DepositRecord = env
             .storage()
             .persistent()
-            .get(&DataKey::Deposit(nullifier.clone()))
+            .get(&key)
             .unwrap_or_else(|| panic!("deposit not found"));
 
         if record.status != DepositStatus::Active {
@@ -89,9 +156,12 @@ impl EscrowVault {
         }
 
         record.status = DepositStatus::Matched;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Deposit(nullifier), &record);
+        env.storage().persistent().set(&key, &record);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_EXTEND_THRESHOLD,
+            PERSISTENT_EXTEND_TO,
+        );
         record
     }
 
@@ -112,10 +182,15 @@ impl EscrowVault {
             .unwrap();
         settlement.require_auth();
 
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
+
+        let key = DataKey::Deposit(nullifier);
         let mut record: DepositRecord = env
             .storage()
             .persistent()
-            .get(&DataKey::Deposit(nullifier.clone()))
+            .get(&key)
             .unwrap_or_else(|| panic!("deposit not found"));
 
         if record.status != DepositStatus::Matched {
@@ -125,6 +200,19 @@ impl EscrowVault {
             panic!("release amount exceeds deposit");
         }
 
+        // Write status before making any external token calls (checks-effects-
+        // interactions). deposit() places no restriction on which token
+        // contract `asset` is, so a malicious token's transfer implementation
+        // could otherwise reenter release()/cancel()/expire() while status was
+        // still readable as Matched/Active.
+        record.status = DepositStatus::Settled;
+        env.storage().persistent().set(&key, &record);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_EXTEND_THRESHOLD,
+            PERSISTENT_EXTEND_TO,
+        );
+
         let tok = token::Client::new(&env, &record.asset);
         tok.transfer(&env.current_contract_address(), &recipient, &amount);
 
@@ -133,21 +221,21 @@ impl EscrowVault {
         if refund > 0 {
             tok.transfer(&env.current_contract_address(), &record.trader, &refund);
         }
-
-        record.status = DepositStatus::Settled;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Deposit(nullifier), &record);
     }
 
     /// Trader cancels their own active order and reclaims funds.
     pub fn cancel(env: Env, trader: Address, nullifier: BytesN<32>) {
         trader.require_auth();
 
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
+
+        let key = DataKey::Deposit(nullifier);
         let mut record: DepositRecord = env
             .storage()
             .persistent()
-            .get(&DataKey::Deposit(nullifier.clone()))
+            .get(&key)
             .unwrap_or_else(|| panic!("deposit not found"));
 
         if record.trader != trader {
@@ -157,21 +245,30 @@ impl EscrowVault {
             panic!("cannot cancel — not active");
         }
 
+        // Status write before transfer — see release() for why.
+        record.status = DepositStatus::Cancelled;
+        env.storage().persistent().set(&key, &record);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_EXTEND_THRESHOLD,
+            PERSISTENT_EXTEND_TO,
+        );
+
         let tok = token::Client::new(&env, &record.asset);
         tok.transfer(&env.current_contract_address(), &trader, &record.amount);
-
-        record.status = DepositStatus::Cancelled;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Deposit(nullifier), &record);
     }
 
     /// Anyone can expire an order that has passed its deadline, returning funds to trader.
     pub fn expire(env: Env, nullifier: BytesN<32>) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
+
+        let key = DataKey::Deposit(nullifier);
         let mut record: DepositRecord = env
             .storage()
             .persistent()
-            .get(&DataKey::Deposit(nullifier.clone()))
+            .get(&key)
             .unwrap_or_else(|| panic!("deposit not found"));
 
         if record.status != DepositStatus::Active {
@@ -181,21 +278,47 @@ impl EscrowVault {
             panic!("not expired yet");
         }
 
+        // Status write before transfer — see release() for why.
+        record.status = DepositStatus::Expired;
+        env.storage().persistent().set(&key, &record);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_EXTEND_THRESHOLD,
+            PERSISTENT_EXTEND_TO,
+        );
+
         let tok = token::Client::new(&env, &record.asset);
         tok.transfer(
             &env.current_contract_address(),
             record.trader.clone(),
             &record.amount,
         );
-
-        record.status = DepositStatus::Expired;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Deposit(nullifier), &record);
     }
 
     pub fn get_deposit(env: Env, nullifier: BytesN<32>) -> Option<DepositRecord> {
         env.storage().persistent().get(&DataKey::Deposit(nullifier))
+    }
+
+    /// Admin-only emergency switch. Pausing blocks new deposits only —
+    /// cancel/expire/release always remain callable so traders can never be
+    /// locked out of funds already in the vault.
+    pub fn set_paused(env: Env, admin: Address, paused: bool) {
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic!("not admin");
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &paused);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 }
 
@@ -220,7 +343,15 @@ mod tests {
         let admin = Address::generate(&env);
         let matching_engine = Address::generate(&env);
         let settlement = Address::generate(&env);
-        client.initialize(&admin, &matching_engine, &settlement);
+        let xlm_token = Address::generate(&env);
+        let usdc_token = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &matching_engine,
+            &settlement,
+            &xlm_token,
+            &usdc_token,
+        );
 
         // Calling release on a nullifier with no deposit record panics with "deposit not found".
         // To test the "not matched" guard, we would need to deposit first, then call release.
@@ -259,14 +390,22 @@ mod tests {
         let admin = Address::generate(&env);
         let matching_engine = Address::generate(&env);
         let settlement = Address::generate(&env);
-        client.initialize(&admin, &matching_engine, &settlement);
 
-        // A real SAC token so the transfers actually move balances.
+        // A real SAC token so the transfers actually move balances. Created
+        // before initialize() so it can be registered as an allowed asset.
         let token_admin = Address::generate(&env);
         let sac = env.register_stellar_asset_contract_v2(token_admin);
         let token_addr = sac.address();
         let token = soroban_sdk::token::TokenClient::new(&env, &token_addr);
         let minter = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+        let other_token = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &matching_engine,
+            &settlement,
+            &token_addr,
+            &other_token,
+        );
 
         let trader = Address::generate(&env); // depositor (e.g. buyer escrowing USDC)
         let counterparty = Address::generate(&env); // recipient (e.g. seller)
@@ -312,12 +451,19 @@ mod tests {
         let admin = Address::generate(&env);
         let matching_engine = Address::generate(&env);
         let settlement = Address::generate(&env);
-        client.initialize(&admin, &matching_engine, &settlement);
 
         let token_admin = Address::generate(&env);
         let sac = env.register_stellar_asset_contract_v2(token_admin);
         let token_addr = sac.address();
         let minter = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+        let other_token = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &matching_engine,
+            &settlement,
+            &token_addr,
+            &other_token,
+        );
 
         let trader = Address::generate(&env);
         let counterparty = Address::generate(&env);
@@ -347,7 +493,157 @@ mod tests {
         let admin = Address::generate(&env);
         let me = Address::generate(&env);
         let s = Address::generate(&env);
-        client.initialize(&admin, &me, &s);
-        client.initialize(&admin, &me, &s);
+        let xlm_token = Address::generate(&env);
+        let usdc_token = Address::generate(&env);
+        client.initialize(&admin, &me, &s, &xlm_token, &usdc_token);
+        client.initialize(&admin, &me, &s, &xlm_token, &usdc_token);
+    }
+
+    #[test]
+    #[should_panic(expected = "deposits paused")]
+    fn test_deposit_rejected_while_paused() {
+        let (env, contract_id) = setup_env();
+        let client = EscrowVaultClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let matching_engine = Address::generate(&env);
+        let settlement = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let sac = env.register_stellar_asset_contract_v2(token_admin);
+        let token_addr = sac.address();
+        let minter = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+        let other_token = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &matching_engine,
+            &settlement,
+            &token_addr,
+            &other_token,
+        );
+
+        client.set_paused(&admin, &true);
+        assert!(client.is_paused());
+
+        let trader = Address::generate(&env);
+        minter.mint(&trader, &100i128);
+
+        client.deposit(
+            &trader,
+            &token_addr,
+            &100i128,
+            &BytesN::from_array(&env, &[42u8; 32]),
+            &BytesN::from_array(&env, &[43u8; 32]),
+            &u64::MAX,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not admin")]
+    fn test_set_paused_rejects_non_admin() {
+        let (env, contract_id) = setup_env();
+        let client = EscrowVaultClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let matching_engine = Address::generate(&env);
+        let settlement = Address::generate(&env);
+        let xlm_token = Address::generate(&env);
+        let usdc_token = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &matching_engine,
+            &settlement,
+            &xlm_token,
+            &usdc_token,
+        );
+
+        let attacker = Address::generate(&env);
+        client.set_paused(&attacker, &true);
+    }
+
+    /// Pausing must not block a trader from cancelling and reclaiming an
+    /// already-active deposit — the pause switch stops NEW exposure, never exit.
+    #[test]
+    fn test_cancel_still_works_while_paused() {
+        let (env, contract_id) = setup_env();
+        let client = EscrowVaultClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let matching_engine = Address::generate(&env);
+        let settlement = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let sac = env.register_stellar_asset_contract_v2(token_admin);
+        let token_addr = sac.address();
+        let token = soroban_sdk::token::TokenClient::new(&env, &token_addr);
+        let minter = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+        let other_token = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &matching_engine,
+            &settlement,
+            &token_addr,
+            &other_token,
+        );
+
+        let trader = Address::generate(&env);
+        minter.mint(&trader, &100i128);
+        let nullifier = BytesN::from_array(&env, &[55u8; 32]);
+
+        client.deposit(
+            &trader,
+            &token_addr,
+            &100i128,
+            &nullifier,
+            &BytesN::from_array(&env, &[56u8; 32]),
+            &u64::MAX,
+        );
+
+        client.set_paused(&admin, &true);
+        client.cancel(&trader, &nullifier);
+        assert_eq!(token.balance(&trader), 100);
+    }
+
+    /// deposit() must reject any asset that isn't the configured XLM/USDC
+    /// pair — the actual security property is at settle() (which
+    /// independently checks each leg's asset before releasing), but this is
+    /// the defense-in-depth half: nothing should ever get escrowed as a
+    /// third asset in the first place.
+    #[test]
+    #[should_panic(expected = "asset not allowed")]
+    fn test_deposit_rejects_unlisted_asset() {
+        let (env, contract_id) = setup_env();
+        let client = EscrowVaultClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let matching_engine = Address::generate(&env);
+        let settlement = Address::generate(&env);
+        let xlm_token = Address::generate(&env);
+        let usdc_token = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &matching_engine,
+            &settlement,
+            &xlm_token,
+            &usdc_token,
+        );
+
+        // A real, freshly-minted SAC token that is NOT xlm_token or usdc_token.
+        let rogue_admin = Address::generate(&env);
+        let rogue_sac = env.register_stellar_asset_contract_v2(rogue_admin);
+        let rogue_token = rogue_sac.address();
+        let minter = soroban_sdk::token::StellarAssetClient::new(&env, &rogue_token);
+
+        let trader = Address::generate(&env);
+        minter.mint(&trader, &100i128);
+
+        client.deposit(
+            &trader,
+            &rogue_token,
+            &100i128,
+            &BytesN::from_array(&env, &[77u8; 32]),
+            &BytesN::from_array(&env, &[78u8; 32]),
+            &u64::MAX,
+        );
     }
 }

@@ -63,7 +63,9 @@ stellar contract invoke \
   -- initialize \
   --admin "$DEPLOYER" \
   --matching_engine "$MATCHING_ENGINE_ADDRESS" \
-  --settlement "$SETTLEMENT_ADDRESS"
+  --settlement "$SETTLEMENT_ADDRESS" \
+  --xlm_token "${XLM_SAC_ADDRESS:-CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC}" \
+  --usdc_token "${USDC_TOKEN_ADDRESS:-CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA}"
 
 echo ""
 echo "==> Initializing OrderBook..."

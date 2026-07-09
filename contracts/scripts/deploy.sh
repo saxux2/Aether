@@ -33,13 +33,13 @@ deploy() {
   local WASM="$TARGET/${NAME}.optimized.wasm"
   # Fall back to unoptimized if optimized doesn't exist
   [ -f "$WASM" ] || WASM="$TARGET/${NAME}.wasm"
-  echo "==> Deploying $NAME from $WASM..."
+  echo "==> Deploying $NAME from $WASM..." >&2
   local ADDR
   ADDR=$(stellar contract deploy \
     --wasm "$WASM" \
     --source "$SOURCE" \
     --network "$NETWORK")
-  echo "    $NAME: $ADDR"
+  echo "    $NAME: $ADDR" >&2
   echo "$ADDR"
 }
 

@@ -27,6 +27,12 @@ mod settlement {
     soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/settlement.wasm");
 }
 
+// TTL bookkeeping — see escrow_vault/src/lib.rs's constants for the full
+// rationale (same values, same ~5s ledger close time assumption).
+const DAY_IN_LEDGERS: u32 = 17_280;
+const INSTANCE_EXTEND_THRESHOLD: u32 = DAY_IN_LEDGERS * 30;
+const INSTANCE_EXTEND_TO: u32 = DAY_IN_LEDGERS * 60;
+
 #[contract]
 pub struct MatchingEngine;
 
@@ -63,6 +69,9 @@ impl MatchingEngine {
         env.storage().instance().set(&DataKey::Relayer2, &relayer_2);
         env.storage().instance().set(&DataKey::Relayer3, &relayer_3);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
     }
 
     /// Validate and settle a matched order pair — trustlessly.
@@ -91,6 +100,28 @@ impl MatchingEngine {
     ) {
         let relayer_1: Address = env.storage().instance().get(&DataKey::Relayer1).unwrap();
         relayer_1.require_auth();
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            panic!("matching paused");
+        }
+
+        // A pair can never legitimately match itself. This is currently also
+        // prevented as a side effect of EscrowVault rejecting a second
+        // lock_for_settlement() call on an already-Matched deposit, but that
+        // guard lives two contracts away — assert it explicitly here too so
+        // this contract's own correctness doesn't depend on that side effect.
+        if buyer_commitment == seller_commitment {
+            panic!("buyer and seller commitment must differ");
+        }
 
         // 1. Verify the match proof on-chain via the ZKVerifier (real BN254 Groth16).
         let zk_addr: Address = env.storage().instance().get(&DataKey::ZkVerifier).unwrap();
@@ -182,5 +213,161 @@ impl MatchingEngine {
             .instance()
             .get(&DataKey::MatchCount)
             .unwrap_or(0)
+    }
+
+    /// Admin-only emergency switch. Pausing blocks new match submissions only.
+    pub fn set_paused(env: Env, admin: Address, paused: bool) {
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic!("not admin");
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &paused);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, Vec};
+
+    fn setup_env() -> (Env, Address, Address, Address, Address, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(MatchingEngine, ());
+
+        let admin = Address::generate(&env);
+        let relayer_1 = Address::generate(&env);
+        let relayer_2 = Address::generate(&env);
+        let relayer_3 = Address::generate(&env);
+        // Placeholders — none of the tests below reach a cross-contract call
+        // into these (they all panic at the pause/self-match/admin guard,
+        // before submit_match ever touches OrderBook/EscrowVault/Settlement/
+        // ZKVerifier), so these addresses are never dereferenced as real
+        // contracts.
+        let order_book = Address::generate(&env);
+        let escrow_vault = Address::generate(&env);
+        let settlement = Address::generate(&env);
+        let zk_verifier = Address::generate(&env);
+
+        let client = MatchingEngineClient::new(&env, &contract_id);
+        client.initialize(
+            &admin,
+            &order_book,
+            &escrow_vault,
+            &settlement,
+            &zk_verifier,
+            &relayer_1,
+            &relayer_2,
+            &relayer_3,
+        );
+
+        (
+            env,
+            contract_id,
+            admin,
+            relayer_1,
+            relayer_2,
+            relayer_3,
+            order_book,
+        )
+    }
+
+    fn dummy_proof(env: &Env) -> Groth16Proof {
+        Groth16Proof {
+            pi_a: BytesN::from_array(env, &[0u8; 64]),
+            pi_b: BytesN::from_array(env, &[0u8; 128]),
+            pi_c: BytesN::from_array(env, &[0u8; 64]),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "not admin")]
+    fn test_set_paused_rejects_non_admin() {
+        let (env, contract_id, _admin, _r1, _r2, _r3, _ob) = setup_env();
+        let client = MatchingEngineClient::new(&env, &contract_id);
+        let attacker = Address::generate(&env);
+        client.set_paused(&attacker, &true);
+    }
+
+    #[test]
+    fn test_set_paused_toggles_is_paused() {
+        let (env, contract_id, admin, ..) = setup_env();
+        let client = MatchingEngineClient::new(&env, &contract_id);
+        assert!(!client.is_paused());
+        client.set_paused(&admin, &true);
+        assert!(client.is_paused());
+        client.set_paused(&admin, &false);
+        assert!(!client.is_paused());
+    }
+
+    #[test]
+    #[should_panic(expected = "matching paused")]
+    fn test_submit_match_rejected_while_paused() {
+        let (env, contract_id, admin, ..) = setup_env();
+        let client = MatchingEngineClient::new(&env, &contract_id);
+        client.set_paused(&admin, &true);
+
+        let commitment = BytesN::from_array(&env, &[1u8; 32]);
+        let signals: Vec<BytesN<32>> = Vec::new(&env);
+        client.submit_match(
+            &commitment,
+            &commitment,
+            &0i128,
+            &0i128,
+            &dummy_proof(&env),
+            &signals,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "buyer and seller commitment must differ")]
+    fn test_submit_match_rejects_self_match() {
+        let (env, contract_id, ..) = setup_env();
+        let client = MatchingEngineClient::new(&env, &contract_id);
+
+        // Same commitment on both sides — must be rejected before any proof
+        // verification or cross-contract call is attempted, regardless of
+        // whether the (here, dummy) proof would otherwise be considered.
+        let commitment = BytesN::from_array(&env, &[7u8; 32]);
+        let signals: Vec<BytesN<32>> = Vec::new(&env);
+        client.submit_match(
+            &commitment,
+            &commitment,
+            &100i128,
+            &100i128,
+            &dummy_proof(&env),
+            &signals,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "already initialized")]
+    fn test_double_initialize_rejected() {
+        let (env, contract_id, admin, r1, r2, r3, ob) = setup_env();
+        let client = MatchingEngineClient::new(&env, &contract_id);
+        let escrow_vault = Address::generate(&env);
+        let settlement = Address::generate(&env);
+        let zk_verifier = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &ob,
+            &escrow_vault,
+            &settlement,
+            &zk_verifier,
+            &r1,
+            &r2,
+            &r3,
+        );
     }
 }

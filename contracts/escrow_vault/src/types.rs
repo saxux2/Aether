@@ -5,6 +5,9 @@ pub enum DataKey {
     Admin,
     MatchingEngineAddr,
     SettlementAddr,
+    Paused,
+    XlmToken,
+    UsdcToken,
     /// nullifier -> DepositRecord
     Deposit(BytesN<32>),
 }

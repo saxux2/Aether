@@ -11,6 +11,15 @@ pub use types::{DataKey, Groth16Proof, VerificationKey};
 
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Vec};
 
+// TTL bookkeeping — see escrow_vault/src/lib.rs's constants for the full
+// rationale (same values, same ~5s ledger close time assumption). This
+// contract is called on every single order submission and match — it holds
+// no per-key persistent data, only the 4 verification keys in instance
+// storage, but that instance still needs periodic extension like any other.
+const DAY_IN_LEDGERS: u32 = 17_280;
+const INSTANCE_EXTEND_THRESHOLD: u32 = DAY_IN_LEDGERS * 30;
+const INSTANCE_EXTEND_TO: u32 = DAY_IN_LEDGERS * 60;
+
 #[contract]
 pub struct ZKVerifier;
 
@@ -36,6 +45,9 @@ impl ZKVerifier {
             .set(&DataKey::VkBalance, &vk_balance);
         env.storage().instance().set(&DataKey::VkRange, &vk_range);
         env.storage().instance().set(&DataKey::VkMatch, &vk_match);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
     }
 
     /// Verify an OrderCommitment Groth16 proof.
@@ -44,6 +56,9 @@ impl ZKVerifier {
         proof: Groth16Proof,
         public_signals: Vec<BytesN<32>>,
     ) -> bool {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
         let vk: VerificationKey = env.storage().instance().get(&DataKey::VkOrder).unwrap();
         groth16::verify_groth16(&env, &proof, &public_signals, &vk)
     }
@@ -54,6 +69,9 @@ impl ZKVerifier {
         proof: Groth16Proof,
         public_signals: Vec<BytesN<32>>,
     ) -> bool {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
         let vk: VerificationKey = env.storage().instance().get(&DataKey::VkBalance).unwrap();
         groth16::verify_groth16(&env, &proof, &public_signals, &vk)
     }
@@ -64,6 +82,9 @@ impl ZKVerifier {
         proof: Groth16Proof,
         public_signals: Vec<BytesN<32>>,
     ) -> bool {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
         let vk: VerificationKey = env.storage().instance().get(&DataKey::VkRange).unwrap();
         groth16::verify_groth16(&env, &proof, &public_signals, &vk)
     }
@@ -75,6 +96,9 @@ impl ZKVerifier {
         proof: Groth16Proof,
         public_signals: Vec<BytesN<32>>,
     ) -> bool {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
         let vk: VerificationKey = env.storage().instance().get(&DataKey::VkMatch).unwrap();
         groth16::verify_groth16(&env, &proof, &public_signals, &vk)
     }

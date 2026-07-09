@@ -13,8 +13,16 @@ use soroban_sdk::{vec, BytesN, Env, Vec};
 ///   G2 = be(x.c1) || be(x.c0) || be(y.c1) || be(y.c0) (128 bytes, imaginary-first)
 ///   Fr = be(scalar)                                  (32 bytes)
 ///
-/// Returns false (rather than panicking) on any structural mismatch so the
-/// calling contract can treat it as a plain "invalid proof".
+/// Returns false (rather than panicking) when the public-signal count doesn't
+/// match the verification key's expected input count. It does NOT catch every
+/// malformed input this way: off-curve or otherwise invalid point bytes in
+/// `proof`/`vk` still panic inside the BN254 host functions (`from_bytes`),
+/// aborting the calling contract's transaction rather than returning false.
+/// Callers cannot distinguish "cleanly invalid proof" from "malformed proof"
+/// bytes from this function's return value alone — both a false return and a
+/// panic mean "do not trust this proof," which is what every caller in this
+/// codebase already does with the result, so this is a documentation-accuracy
+/// note rather than a behavior change.
 pub fn verify_groth16(
     env: &Env,
     proof: &Groth16Proof,
