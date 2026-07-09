@@ -13,6 +13,11 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+# Least-privilege default — these jobs only call external APIs (Stellar RPC,
+# Render, Vercel) via secrets, none need to write to the repo itself.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -21,6 +26,13 @@ jobs:
   deploy-contract:
     name: Deploy contract (Stellar testnet)
     runs-on: ubuntu-latest
+    # References the repo's existing "Production" GitHub Environment (created
+    # 2026-06-30, currently has zero protection rules configured). This gives
+    # the repo owner a place to add required reviewers/wait timers (Settings
+    # → Environments → Production) before any push to main can reach a live
+    # deploy — currently a no-op until that's configured; add it now rather
+    # than after a mainnet job gets wired into this file under time pressure.
+    environment: Production
     outputs:
       zk_verifier: ${{ steps.addresses.outputs.zk_verifier }}
       escrow_vault: ${{ steps.addresses.outputs.escrow_vault }}
@@ -94,6 +106,7 @@ jobs:
   deploy-relayer:
     name: Deploy relayer (Render)
     runs-on: ubuntu-latest
+    environment: Production
     needs: [deploy-contract]
     # No dependency on deploy-contract actually deploying — contract deploy
     # is opt-in (needs STELLAR_SECRET_KEY) and skips by default. The relayer
@@ -145,6 +158,7 @@ jobs:
   deploy-frontend:
     name: Deploy frontend (Vercel)
     runs-on: ubuntu-latest
+    environment: Production
     needs: [deploy-contract, deploy-relayer]
     steps:
       - uses: actions/checkout@v4

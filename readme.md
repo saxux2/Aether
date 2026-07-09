@@ -527,7 +527,7 @@ v1 `EscrowVault.release(amount)` closes the deposit permanently. The matcher con
 | Package manager | npm workspaces |
 | CI/CD | GitHub Actions |
 | Frontend hosting | Vercel |
-| Relayer hosting | Railway |
+| Relayer hosting | Render |
 
 ---
 

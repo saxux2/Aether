@@ -11,6 +11,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege default — no job here needs to write to the repo or its
+# packages. Override per-job only if a future job genuinely needs more.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -54,12 +59,83 @@ jobs:
         working-directory: contracts
         run: cargo fmt --all -- --check
 
+      # Checks Cargo.lock against the RustSec advisory database. This is a
+      # fund-custody codebase (escrow_vault holds all trader funds) — a known
+      # vulnerability in a dependency belongs in the same CI gate as a test
+      # failure, not something only discovered by manually running the tool.
+      - name: Dependency vulnerability scan (cargo audit)
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: contracts
+
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4
         with:
           name: contract-wasms
           path: contracts/target/wasm32v1-none/release/*.wasm
           if-no-files-found: warn
+
+  # ── Circuit CI ─────────────────────────────────────────────────────────────
+  # Was previously untested in CI entirely — a real gap given AUDIT_PREP.md's
+  # own framing: "an under-constrained circuit... would bypass every on-chain
+  # guard even if the contracts themselves are perfect." Two real soundness
+  # bugs (see circuits/CEREMONY_STATUS.md) were only caught by the adversarial
+  # cases in test_circuits.js; this job makes sure they stay caught.
+  #
+  # Uses a round-0000 Groth16 setup (no ceremony contribute/finalize) purely
+  # to get a working proving/verification key pair fast — CI is checking
+  # circuit CONSTRAINT correctness, not key custody, so the single-round key
+  # is fine here even though it would never be safe to deploy. See
+  # circuits/CEREMONY_STATUS.md for what mainnet actually requires.
+  circuits:
+    name: Circuits (compile + adversarial test suite)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install circom
+        run: |
+          curl -fL -o /usr/local/bin/circom \
+            https://github.com/iden3/circom/releases/download/v2.2.2/circom-linux-amd64
+          chmod +x /usr/local/bin/circom
+          circom --version
+
+      - name: Compile circuits
+        working-directory: circuits
+        run: bash scripts/compile_circuits.sh
+
+      - name: Cache Powers of Tau file
+        uses: actions/cache@v4
+        with:
+          path: circuits/build/pot12_final.ptau
+          key: pot12-final-ptau-v1
+
+      - name: Round-0000 Groth16 setup (CI test keys only, not a real ceremony)
+        working-directory: circuits
+        run: |
+          bash scripts/setup_ceremony.sh
+          for CIRC in order_commitment balance_proof range_proof match_proof; do
+            cp "build/${CIRC}_0000.zkey" "build/${CIRC}_final.zkey"
+          done
+
+      - name: Export verification keys
+        working-directory: circuits
+        run: bash scripts/export_vkeys.sh
+
+      - name: Run circuit test suite (happy-path + adversarial)
+        working-directory: circuits
+        run: node scripts/test_circuits.js
 
   # ── Frontend CI ────────────────────────────────────────────────────────────
   frontend:
@@ -77,6 +153,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Dependency vulnerability scan (npm audit)
+        run: npm audit --audit-level=high
 
       - name: Build SDK
         run: npm run build:sdk
@@ -133,6 +212,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Dependency vulnerability scan (npm audit)
+        run: npm audit --audit-level=high
 
       - name: Run relayer tests
         working-directory: relayer
