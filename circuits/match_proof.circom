@@ -87,17 +87,42 @@ template MatchProof() {
     leSellerQty.out === 1;
 
     // 5. usdc_amount = floor(xlm_amount * clearing_price / 1e6)
-    //    i.e. 0 <= xlm_amount*clearing_price - usdc_amount*1e6 < 1e6
+    //    i.e. usdc_amount*1e6 <= xlm_amount*clearing_price < (usdc_amount+1)*1e6
+    //
+    // Deliberately NOT implemented as a single `rem = gross - scaled` signal
+    // fed into one LessThan(128): circomlib's LessThan/LessEqThan(n) is only
+    // sound when BOTH inputs are individually < 2^n. If usdc_amount is
+    // claimed one unit too high in the exact-division case (gross a multiple
+    // of 1e6), `gross - scaled` goes negative and wraps to a field element
+    // near the BN254 modulus (~2^254) — far outside LessThan(128)'s valid
+    // input range, which does not fail closed here as the field-subtraction
+    // approach assumes: circom finds a spurious valid witness, so an
+    // adversary could overstate usdc_amount by exactly 1 stroop-equivalent
+    // whenever the division is exact. Caught by circuits/scripts/test_circuits.js's
+    // "usdc_amount off by one from the exact floor-division result" case,
+    // which fails against the field-subtraction version of this check.
+    //
+    // The fix: compare `scaled` and `gross` directly instead of their
+    // difference. Both are individually bounded below 2^128 (gross is a
+    // product of two <2^64 values; scaled is usdc_amount capped at <2^64
+    // times a fixed 1e6, so <2^84), which is exactly LessEqThan/LessThan's
+    // documented precondition — no subtraction, so nothing to wrap.
     signal gross;
     gross <== xlm_amount * clearing_price;   // < 2^128
     signal scaled;
-    scaled <== usdc_amount * 1000000;
-    signal rem;
-    rem <== gross - scaled;
-    component remLt = LessThan(128);
-    remLt.in[0] <== rem;          // wraps huge (and fails) if usdc_amount too large
-    remLt.in[1] <== 1000000;
-    remLt.out === 1;
+    scaled <== usdc_amount * 1000000;        // < 2^84
+    signal scaledPlusOne;
+    scaledPlusOne <== scaled + 1000000;
+
+    component lowerOk = LessEqThan(128);
+    lowerOk.in[0] <== scaled;
+    lowerOk.in[1] <== gross;
+    lowerOk.out === 1;
+
+    component upperOk = LessThan(128);
+    upperOk.in[0] <== gross;
+    upperOk.in[1] <== scaledPlusOne;
+    upperOk.out === 1;
 }
 
 component main {public [buyer_commitment, seller_commitment, clearing_price, xlm_amount, usdc_amount]} = MatchProof();
