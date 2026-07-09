@@ -256,3 +256,30 @@ export async function getRecentTrades(limit = 50): Promise<IMatch[]> {
     .sort({ settledAt: -1 })
     .limit(limit);
 }
+
+/**
+ * Crash-recovery: recordMatch() flips both sides of a pair to 'matched'
+ * BEFORE the on-chain settlement is submitted (see recordMatch above). If
+ * the process dies in between — crash, deploy, OOM — that Match is left
+ * 'pending' forever and both orders stuck 'matched', invisible to
+ * getAllActiveOrders() (which only pulls status:'active'), with nothing to
+ * ever revisit them. Call this once at startup (see index.ts) to roll back
+ * any match that's been pending for longer than a few batch cycles could
+ * plausibly take, returning the affected orders to 'active' so they can be
+ * matched again.
+ */
+export async function reconcileStalePendingMatches(staleAfterMs = 5 * 60_000): Promise<number> {
+  const cutoff = new Date(Date.now() - staleAfterMs);
+  const stale = await Match.find({ status: 'pending', createdAt: { $lt: cutoff } });
+
+  for (const m of stale) {
+    await Match.updateOne(
+      { _id: m._id },
+      { $set: { status: 'failed', error: 'reconciled: stale pending match from a previous run' } }
+    );
+    await revertFill(m.buyerCommitment, BigInt(m.xlmAmount));
+    await revertFill(m.sellerCommitment, BigInt(m.xlmAmount));
+  }
+
+  return stale.length;
+}
