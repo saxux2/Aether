@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { useWalletStore } from '@/store/walletSlice';
-import { XLM_SCALE, PRICE_SCALE } from '@/utils/constants';
+import { XLM_SCALE, PRICE_SCALE, computeEscrowAmount } from '@/utils/constants';
 import { getEscrowBalance } from '@/utils/stellar';
 import type { GeneratedProofs } from '@/lib/sdk/types';
 
@@ -39,7 +39,12 @@ export function useProver() {
         const salt = randomFieldElement();
         const nonce = randomFieldElement();
 
-        setProofState({ status: 'generating', step: 'Fetching escrow balance...' });
+        // The real amount escrowed for this order — must match buildOrderTx's
+        // amountIn exactly, since order_book checks the balance proof's
+        // minimum_balance against the on-chain amount_in.
+        const escrowAmount = computeEscrowAmount(params.direction, quantityBig, priceBig);
+
+        setProofState({ status: 'generating', step: 'Fetching wallet balance...' });
         const balance = await getEscrowBalance(
           address ?? '',
           params.direction === 'buy' ? 'USDC' : 'XLM'
@@ -55,6 +60,7 @@ export function useProver() {
             secret: traderSecret,
             nonce,
             balance,
+            escrowAmount,
           },
           '/circuits'
         );
@@ -67,7 +73,7 @@ export function useProver() {
         return null;
       }
     },
-    [traderSecret]
+    [traderSecret, address]
   );
 
   const reset = useCallback(() => setProofState({ status: 'idle' }), []);

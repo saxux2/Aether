@@ -6,20 +6,19 @@ export const CONTRACT_ID: string =
   process.env.NEXT_PUBLIC_ORDER_BOOK_ADDRESS ?? '';
 
 /**
- * Invoke a Soroban contract function.
+ * Simulate a read-only Soroban contract call (no signing, no state change).
  *
- * For read-only (simulation-only) calls pass signerSecret = undefined.
- * For state-changing calls pass the caller's secret key.
+ * This is intentionally read-only: it never accepts or handles a secret key.
+ * Any state-changing call must be built as an XDR transaction and signed via
+ * the Freighter browser extension (see utils/stellar.ts / lib/stellarWallet.ts)
+ * — raw secret keys must never be entered into or handled by this frontend.
  */
 export async function callContractFunction(
   contractId: string,
   method: string,
   args: StellarSdk.xdr.ScVal[],
-  signerSecret?: string,
 ): Promise<StellarSdk.xdr.ScVal | null> {
-  const keypair = signerSecret
-    ? StellarSdk.Keypair.fromSecret(signerSecret)
-    : StellarSdk.Keypair.random();
+  const keypair = StellarSdk.Keypair.random();
 
   const account = await server.getAccount(keypair.publicKey());
 
@@ -43,36 +42,8 @@ export async function callContractFunction(
     throw new Error(`Simulation failed: ${simResult.error}`);
   }
 
-  if (!signerSecret) {
-    return (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval ?? null;
-  }
-
-  const assembled = SorobanRpc.assembleTransaction(
-    tx,
-    simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse,
-  ).build();
-
-  assembled.sign(keypair);
-
-  const sendResult = await server.sendTransaction(assembled);
-
-  if (sendResult.status === 'ERROR') {
-    throw new Error(`Transaction failed: ${sendResult.errorResult}`);
-  }
-
-  let getResult: SorobanRpc.Api.GetTransactionResponse;
-  do {
-    await new Promise((r) => setTimeout(r, 2000));
-    getResult = await server.getTransaction(sendResult.hash);
-  } while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND);
-
-  if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-    throw new Error(`Transaction failed with status: ${getResult.status}`);
-  }
-
-  return (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse)
-    .returnValue ?? null;
+  return (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+    .result?.retval ?? null;
 }
 
 /**

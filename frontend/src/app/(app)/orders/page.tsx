@@ -1,11 +1,13 @@
 'use client';
 
+import { useState } from 'react';
 import { useTraderOrders } from '@/hooks/useTraderOrders';
 import { useWallet } from '@/hooks/useWallet';
 import { useOrders } from '@/hooks/useOrders';
 import { useOrdersStore } from '@/store/ordersSlice';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { shortAddress, formatDateTime } from '@/utils/format';
+import { explorerTxUrl } from '@/utils/constants';
 import { mergeOrders, type MergedOrder } from '@/utils/mergeOrders';
 import { MobileCard } from '@/components/mobile/MobileCard';
 import { OrderList } from '@/components/mobile/OrderList';
@@ -142,7 +144,7 @@ function OrderTable({ orders, showCancel, cancelOrder, isCancelling, emptyMessag
                   <td className="px-4 py-3 text-xs">
                     {order.settlementTxHash ? (
                       <a
-                        href={`https://stellar.expert/explorer/testnet/tx/${order.settlementTxHash}`}
+                        href={explorerTxUrl(order.settlementTxHash)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-accent hover:underline font-mono"
@@ -168,8 +170,21 @@ export default function OrdersPage() {
   const { connected, address } = useWallet();
   const { cancelOrder, isCancelling } = useOrders();
   const localOrders = useOrdersStore((s) => s.orders);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const { data: apiOrders, isLoading } = useTraderOrders(address, connected);
+
+  // cancelOrder (mutateAsync) rejects on failure — awaiting it here (instead of
+  // letting callers fire-and-forget) avoids an unhandled promise rejection and
+  // gives the user visible feedback when a cancel fails.
+  const handleCancel = async (id: string) => {
+    setCancelError(null);
+    try {
+      await cancelOrder(id);
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'Failed to cancel order');
+    }
+  };
 
   if (isMobile === null) return null;
 
@@ -211,11 +226,12 @@ export default function OrdersPage() {
           <OrderList
             orders={mergedLive}
             showCancel
-            cancelOrder={cancelOrder}
+            cancelOrder={handleCancel}
             isCancelling={isCancelling}
             emptyMessage="No live orders."
             emptySubtitle="Head to Trade to place an order."
           />
+          {cancelError && <p className="px-4 pb-3 text-xs text-down">{cancelError}</p>}
         </MobileCard>
 
         <MobileCard noPadding>
@@ -257,12 +273,13 @@ export default function OrdersPage() {
           <OrderTable
             orders={mergedLive}
             showCancel={true}
-            cancelOrder={cancelOrder}
+            cancelOrder={handleCancel}
             isCancelling={isCancelling}
             emptyMessage="No live orders. Head to Trade to place an order."
             isLoading={isLoading}
           />
         </div>
+        {cancelError && <p className="text-xs text-down">{cancelError}</p>}
       </section>
 
       <section className="flex flex-col gap-3">
@@ -278,7 +295,7 @@ export default function OrdersPage() {
           <OrderTable
             orders={mergedSettled}
             showCancel={false}
-            cancelOrder={cancelOrder}
+            cancelOrder={handleCancel}
             isCancelling={isCancelling}
             emptyMessage="No settled orders yet."
             isLoading={isLoading}

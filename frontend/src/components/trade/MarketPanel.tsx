@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useOrderBook, type BookLevel, type SettledTrade } from '@/hooks/useOrderBook';
+import { explorerTxUrl } from '@/utils/constants';
 
 const MAX_ROWS = 11; // levels shown per side
 
@@ -253,7 +254,7 @@ function TradeRow({ trade }: { trade: SettledTrade }) {
   if (trade.txHash) {
     return (
       <a
-        href={`https://stellar.expert/explorer/testnet/tx/${trade.txHash}`}
+        href={explorerTxUrl(trade.txHash)}
         target="_blank"
         rel="noopener noreferrer"
         title={`Batch #${trade.batchId ?? '—'} — view settlement on Stellar.Expert`}

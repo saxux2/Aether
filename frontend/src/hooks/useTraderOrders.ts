@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/utils/api';
+import { useWalletStore } from '@/store/walletSlice';
 
 export interface ApiOrder {
   commitment: string;
@@ -31,13 +32,20 @@ export interface ApiOrder {
 }
 
 export function useTraderOrders(address: string | null, connected: boolean) {
+  const traderSecretProof = useWalletStore((s) => s.traderSecretProof);
+
   return useQuery<ApiOrder[]>({
     queryKey: ['trader-orders', address],
     queryFn: async () => {
-      const res = await apiClient.get('/api/orders', { params: { trader: address } });
+      // `proof` lets the relayer verify we actually control `address`'s key
+      // before returning order history (which includes not-yet-matched
+      // orders' revealed price) — see deriveTraderSecret's doc comment.
+      const res = await apiClient.get('/api/orders', {
+        params: { trader: address, proof: traderSecretProof },
+      });
       return (res.data.orders ?? []) as ApiOrder[];
     },
-    enabled: connected && !!address,
+    enabled: connected && !!address && !!traderSecretProof,
     refetchInterval: 10_000,
     retry: false,
     staleTime: 5_000,

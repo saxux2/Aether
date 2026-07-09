@@ -31,11 +31,6 @@ export async function generateOrderProofs(
   // Nullifier = Poseidon(secret, nonce)
   const nullifier = await poseidonHash([inputs.secret, inputs.nonce]);
 
-  // Price commitment for range proof = Poseidon(price, price_salt)
-  // price_salt derived from salt to avoid extra user input
-  const priceSalt = inputs.salt ^ inputs.price;
-  const priceCommitment = await poseidonHash([inputs.price, priceSalt]);
-
   // ── 1. OrderCommitment proof ───────────────────────────────────────────
   const { proof: orderProof, publicSignals: orderPublicSignals } =
     await snarkjs.groth16.fullProve(
@@ -51,29 +46,37 @@ export async function generateOrderProofs(
     );
 
   // ── 2. BalanceProof ────────────────────────────────────────────────────
+  // quantity/minimum_balance here are the real escrow amount (asset_in units
+  // for this order), NOT the order's XLM-denominated `quantity` — see
+  // OrderInputs.escrowAmount for why those two differ for buy orders.
   const { proof: balanceProof, publicSignals: balancePublicSignals } =
     await snarkjs.groth16.fullProve(
       {
         secret: inputs.secret.toString(),
         balance: inputs.balance.toString(),
-        quantity: inputs.quantity.toString(),
+        quantity: inputs.escrowAmount.toString(),
         nonce: inputs.nonce.toString(),
         nullifier,
-        minimum_balance: inputs.quantity.toString(),
+        minimum_balance: inputs.escrowAmount.toString(),
       },
       `${circuitBase}/balance_proof.wasm`,
       `${circuitBase}/balance_proof_final.zkey`
     );
 
   // ── 3. RangeProof ──────────────────────────────────────────────────────
+  // Re-derives the SAME order commitment from the same (price, quantity,
+  // direction, salt) preimage rather than a separate, unbound price
+  // commitment — see circuits/range_proof.circom for why.
   const { proof: rangeProof, publicSignals: rangePublicSignals } =
     await snarkjs.groth16.fullProve(
       {
         price: inputs.price.toString(),
-        price_salt: priceSalt.toString(),
+        quantity: inputs.quantity.toString(),
+        direction: inputs.direction.toString(),
+        salt: inputs.salt.toString(),
         price_min: PRICE_MIN.toString(),
         price_max: PRICE_MAX.toString(),
-        price_commitment: priceCommitment,
+        commitment,
       },
       `${circuitBase}/range_proof.wasm`,
       `${circuitBase}/range_proof_final.zkey`
@@ -83,8 +86,6 @@ export async function generateOrderProofs(
     commitment,
     nullifier,
     salt: inputs.salt.toString(),
-    priceSalt: priceSalt.toString(),
-    priceCommitment,
     orderProof,
     orderPublicSignals,
     balanceProof,

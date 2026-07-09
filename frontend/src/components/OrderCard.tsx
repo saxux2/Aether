@@ -1,10 +1,10 @@
 'use client';
 
+import { useState } from 'react';
 import { useOrders } from '@/hooks/useOrders';
 import { formatXlm, formatPrice, statusColor, shortHash, relativeTime } from '@/utils/format';
+import { explorerTxUrl } from '@/utils/constants';
 import type { LocalOrder } from '@/store/ordersSlice';
-
-const EXPLORER_TX_URL = 'https://stellar.expert/explorer/testnet/tx';
 
 interface Props {
   order: LocalOrder;
@@ -12,7 +12,17 @@ interface Props {
 
 export function OrderCard({ order }: Props) {
   const { cancelOrder, isCancelling } = useOrders();
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const isSettled = order.status === 'settled';
+
+  const handleCancel = async () => {
+    setCancelError(null);
+    try {
+      await cancelOrder(order.id);
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'Failed to cancel order');
+    }
+  };
 
   return (
     <div
@@ -72,7 +82,7 @@ export function OrderCard({ order }: Props) {
           )}
           {order.settlementTxHash ? (
             <a
-              href={`${EXPLORER_TX_URL}/${order.settlementTxHash}`}
+              href={explorerTxUrl(order.settlementTxHash)}
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-400 hover:text-blue-300 hover:underline font-mono"
@@ -86,13 +96,16 @@ export function OrderCard({ order }: Props) {
       )}
 
       {order.status === 'active' && (
-        <button
-          onClick={() => cancelOrder(order.id)}
-          disabled={isCancelling}
-          className="mt-1 w-full py-1.5 text-xs bg-market-down/10 hover:bg-market-down/20 text-market-down border border-market-down/30 rounded transition-colors disabled:opacity-50"
-        >
-          {isCancelling ? 'Cancelling...' : 'Cancel Order'}
-        </button>
+        <>
+          <button
+            onClick={handleCancel}
+            disabled={isCancelling}
+            className="mt-1 w-full py-1.5 text-xs bg-market-down/10 hover:bg-market-down/20 text-market-down border border-market-down/30 rounded transition-colors disabled:opacity-50"
+          >
+            {isCancelling ? 'Cancelling...' : 'Cancel Order'}
+          </button>
+          {cancelError && <p className="text-xs text-market-down">{cancelError}</p>}
+        </>
       )}
     </div>
   );

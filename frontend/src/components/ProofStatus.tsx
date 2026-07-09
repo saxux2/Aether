@@ -93,7 +93,6 @@ export function ProofStatus({ state }: Props) {
         <div className="space-y-2 p-3 bg-fg/[0.04] rounded-lg border border-hairline/15">
           <Field label="Commitment (Poseidon hash)" value={proofs.commitment} />
           <Field label="Nullifier" value={proofs.nullifier} />
-          <Field label="Price commitment" value={String(proofs.priceCommitment)} />
         </div>
 
         {/* The 3 Groth16 proofs, expandable */}

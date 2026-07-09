@@ -33,6 +33,14 @@ export const USDC_TOKEN_ADDRESS =
 export const USDC_ISSUER =
   process.env.NEXT_PUBLIC_USDC_ISSUER ?? 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 
+// Stellar.expert uses "public" (not "mainnet") as the network segment in its URLs.
+const EXPLORER_NETWORK = STELLAR_NETWORK === 'mainnet' ? 'public' : 'testnet';
+
+/** Build a stellar.expert link for a tx hash, scoped to the configured network. */
+export function explorerTxUrl(hash: string): string {
+  return `https://stellar.expert/explorer/${EXPLORER_NETWORK}/tx/${hash}`;
+}
+
 // Internal scaling
 export const XLM_SCALE = 10_000_000n;    // 1 XLM = 10^7 stroops
 export const PRICE_SCALE = 1_000_000n;   // 1 USDC = 10^6 micro-USDC
@@ -44,3 +52,23 @@ export const MAX_ORDER_XLM = 10_000_000;
 export const PRICE_MIN_USD = 0.001;
 export const PRICE_MAX_USD = 10.0;
 export const DEFAULT_EXPIRY_SECONDS = 3600;
+
+/**
+ * The real amount escrowed for an order: USDC base units for a buy order
+ * (quantity XLM * price / PRICE_SCALE), XLM stroops directly for a sell.
+ *
+ * Single source of truth for this formula — it must produce byte-identical
+ * results everywhere it's used (the signed on-chain transaction amount in
+ * buildOrderTx, the balance proof's minimum_balance witness in useProver,
+ * and the relayer payload's amount_in in useOrders) since order_book now
+ * checks the balance proof's minimum_balance against the transaction's real
+ * amount_in — any drift between call sites would make every honest order
+ * fail that check.
+ */
+export function computeEscrowAmount(
+  direction: 'buy' | 'sell',
+  quantity: bigint,
+  price: bigint
+): bigint {
+  return direction === 'buy' ? (quantity * price) / PRICE_SCALE : quantity;
+}
