@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useWallet } from '@/hooks/useWallet';
+import { explorerTxUrl } from '@/utils/constants';
 
 const INPUT =
   'w-full rounded-lg border border-hairline/15 bg-transparent px-3 py-2 text-sm text-fg placeholder:text-fg/30 focus:outline-none focus:border-hairline/40';
@@ -60,7 +61,7 @@ export function SendXlmForm() {
             Transaction sent! Hash: <span className="font-mono break-all">{txResult.hash}</span>
           </p>
           <a
-            href={`https://stellar.expert/explorer/testnet/tx/${txResult.hash}`}
+            href={explorerTxUrl(txResult.hash)}
             target="_blank"
             rel="noreferrer"
             className="text-[11px] text-up/80 underline"

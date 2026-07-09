@@ -33,6 +33,19 @@ export function MobileTradeView() {
   const { data: apiOrders } = useTraderOrders(address, connected);
 
   const [ordersTab, setOrdersTab] = useState<'open' | 'history'>('open');
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  // cancelOrder (mutateAsync) rejects on failure — await + catch here instead of
+  // letting OrderList fire-and-forget it, so failures don't become unhandled
+  // promise rejections and the user actually sees why a cancel didn't go through.
+  const handleCancel = async (id: string) => {
+    setCancelError(null);
+    try {
+      await cancelOrder(id);
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'Failed to cancel order');
+    }
+  };
 
   const stats = computeStats24h(trades);
   const last = trades[0];
@@ -130,14 +143,17 @@ export function MobileTradeView() {
             <p className="text-sm text-fg/40">Connect wallet to view your orders.</p>
           </div>
         ) : (
-          <OrderList
-            orders={ordersTab === 'open' ? merged.live : merged.settled}
-            showCancel={ordersTab === 'open'}
-            cancelOrder={cancelOrder}
-            isCancelling={isCancelling}
-            emptyMessage={ordersTab === 'open' ? 'No open orders' : 'No order history yet'}
-            emptySubtitle={ordersTab === 'open' ? 'Sealed orders you place appear here' : undefined}
-          />
+          <>
+            <OrderList
+              orders={ordersTab === 'open' ? merged.live : merged.settled}
+              showCancel={ordersTab === 'open'}
+              cancelOrder={handleCancel}
+              isCancelling={isCancelling}
+              emptyMessage={ordersTab === 'open' ? 'No open orders' : 'No order history yet'}
+              emptySubtitle={ordersTab === 'open' ? 'Sealed orders you place appear here' : undefined}
+            />
+            {cancelError && <p className="px-4 pb-3 text-xs text-down">{cancelError}</p>}
+          </>
         )}
       </MobileCard>
 

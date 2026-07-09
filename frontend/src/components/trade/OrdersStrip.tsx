@@ -6,6 +6,7 @@ import { useOrderBook } from '@/hooks/useOrderBook';
 import { useWallet } from '@/hooks/useWallet';
 import { useTraderOrders } from '@/hooks/useTraderOrders';
 import { mergeOrders, type MergedOrder } from '@/utils/mergeOrders';
+import { explorerTxUrl } from '@/utils/constants';
 
 type Tab = 'open' | 'history' | 'trades';
 
@@ -73,6 +74,7 @@ export function OrdersStrip() {
   const { data: apiOrders, isLoading: ordersLoading } = useTraderOrders(address, connected);
   const [tab, setTab] = useState<Tab>('open');
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   // Durable order data: relayer-confirmed orders (by wallet) merged with any
   // locally-submitted orders the relayer hasn't indexed yet. This is the same
@@ -82,10 +84,11 @@ export function OrdersStrip() {
 
   const handleCancel = async (commitment: string) => {
     setCancellingId(commitment);
+    setCancelError(null);
     try {
       await cancelOrder(commitment);
-    } catch {
-      // surfaced via relayer poll; keep strip resilient
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'Failed to cancel order');
     } finally {
       setCancellingId(null);
     }
@@ -131,6 +134,12 @@ export function OrdersStrip() {
           XLM/USDC · Dark Pool
         </span>
       </div>
+
+      {cancelError && tab === 'open' && (
+        <div className="border-b border-down/20 bg-down/5 px-3 py-1.5 text-[11px] text-down">
+          {cancelError}
+        </div>
+      )}
 
       {/* Open Orders */}
       {tab === 'open' && (
@@ -268,7 +277,7 @@ export function OrdersStrip() {
                   return o.settlementTxHash ? (
                     <a
                       key={o.commitment}
-                      href={`https://stellar.expert/explorer/testnet/tx/${o.settlementTxHash}`}
+                      href={explorerTxUrl(o.settlementTxHash)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className={`${HISTORY_GRID} py-1.5 text-xs hover:bg-fg/[0.05]`}
@@ -340,7 +349,7 @@ export function OrdersStrip() {
                     </span>
                     {t.txHash ? (
                       <a
-                        href={`https://stellar.expert/explorer/testnet/tx/${t.txHash}`}
+                        href={explorerTxUrl(t.txHash)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-right font-mono tabular-nums text-accent hover:underline"

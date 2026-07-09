@@ -5,7 +5,17 @@ export interface OrderInputs {
   salt: bigint;         // random 32-byte value as bigint
   secret: bigint;       // trader's private secret, derived from wallet signing
   nonce: bigint;        // per-order nonce (e.g. Date.now())
-  balance: bigint;      // current escrow balance in stroops
+  balance: bigint;      // trader's current wallet balance of asset_in, in its base unit
+  /**
+   * The real amount being escrowed for this order (what OrderBook.submit_order
+   * will pass as `amount_in`) — USDC base units for a buy order, XLM stroops
+   * for a sell order. NOT always equal to `quantity`: `quantity` is always the
+   * XLM-denominated order size (used for the order commitment and matching),
+   * but a buy order escrows USDC. balance_proof's public `minimum_balance` is
+   * set to this value so order_book can check it against the real on-chain
+   * `amount_in`.
+   */
+  escrowAmount: bigint;
 }
 
 /** Raw snarkjs Groth16 proof — as returned by groth16.fullProve() */
@@ -22,9 +32,6 @@ export interface GeneratedProofs {
   nullifier: string;
   /** Original order commitment salt: Poseidon(price, quantity, direction, salt). */
   salt: string;
-  /** Derived salt used only by the range proof: salt XOR price. */
-  priceSalt: string;
-  priceCommitment: string;
   orderProof: Groth16Proof;
   orderPublicSignals: string[];
   balanceProof: Groth16Proof;

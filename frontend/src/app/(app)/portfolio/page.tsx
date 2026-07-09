@@ -8,7 +8,7 @@ import { useTraderOrders, type ApiOrder } from '@/hooks/useTraderOrders';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useOrdersStore } from '@/store/ordersSlice';
 import { relativeTime, shortAddress, statusColor } from '@/utils/format';
-import { STELLAR_HORIZON_URL, USDC_ISSUER } from '@/utils/constants';
+import { STELLAR_HORIZON_URL, USDC_ISSUER, explorerTxUrl } from '@/utils/constants';
 import { mergeOrders } from '@/utils/mergeOrders';
 import { MobileCard } from '@/components/mobile/MobileCard';
 import { OrderList } from '@/components/mobile/OrderList';
@@ -494,7 +494,7 @@ export default function PortfolioPage() {
                       <td className="py-2 text-right">
                         {o.settlement_tx_hash ? (
                           <a
-                            href={`https://stellar.expert/explorer/testnet/tx/${o.settlement_tx_hash}`}
+                            href={explorerTxUrl(o.settlement_tx_hash)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-accent hover:underline font-mono"

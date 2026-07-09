@@ -3,6 +3,7 @@
  * that the trader signs with Freighter before sending to the relayer.
  */
 import {
+  Asset,
   Contract,
   Horizon,
   Networks,
@@ -117,12 +118,17 @@ export async function buildSubmitOrderTransaction(
   const account = await horizon.loadAccount(trader);
   const contract = new Contract(orderBookAddress);
 
+  // The native XLM Stellar Asset Contract ID is deterministic per network (derived
+  // from the network passphrase) — compute it instead of hardcoding a single
+  // network's address, so 'native' resolves correctly on testnet *and* mainnet.
+  const nativeAssetContractId = Asset.native().contractId(passphrase);
+
   const args = [
     new Address(trader).toScVal(),
     xdr.ScVal.scvBytes(Buffer.from(BigInt(params.commitment).toString(16).padStart(64, '0'), 'hex')),
     xdr.ScVal.scvBytes(Buffer.from(BigInt(params.nullifier).toString(16).padStart(64, '0'), 'hex')),
-    new Address(params.assetIn === 'native' ? 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC' : params.assetIn).toScVal(),
-    new Address(params.assetOut === 'native' ? 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC' : params.assetOut).toScVal(),
+    new Address(params.assetIn === 'native' ? nativeAssetContractId : params.assetIn).toScVal(),
+    new Address(params.assetOut === 'native' ? nativeAssetContractId : params.assetOut).toScVal(),
     xdr.ScVal.scvI128(new xdr.Int128Parts({
       hi: xdr.Int64.fromString('0'),
       lo: xdr.Uint64.fromString(params.amountIn.toString()),
@@ -141,6 +147,50 @@ export async function buildSubmitOrderTransaction(
     networkPassphrase: passphrase,
   })
     .addOperation(contract.call('submit_order', ...args))
+    .setTimeout(300)
+    .build();
+
+  const prepared = await server.prepareTransaction(tx);
+  return prepared.toXDR();
+}
+
+export interface CancelOrderTxParams {
+  trader: string;
+  commitment: string;
+  orderBookAddress: string;
+  rpcUrl: string;
+  network?: string;
+}
+
+/**
+ * Build the unsigned Soroban transaction for OrderBook.cancel().
+ * Reclaims the trader's escrowed funds for an order that hasn't matched yet.
+ * Goes through OrderBook (which internally calls EscrowVault.cancel()) rather
+ * than calling EscrowVault directly, so OrderBook's own status/active-orders
+ * bookkeeping stays in sync with the vault.
+ * Returns the transaction XDR string — pass this to Freighter for signing.
+ */
+export async function buildCancelOrderTransaction(
+  params: CancelOrderTxParams
+): Promise<string> {
+  const { rpcUrl, network = 'testnet', trader, commitment, orderBookAddress } = params;
+  const passphrase = NETWORKS[network];
+
+  const server = new rpc.Server(rpcUrl);
+  const horizon = new Horizon.Server(HORIZON_URLS[network] ?? HORIZON_URLS.testnet);
+  const account = await horizon.loadAccount(trader);
+  const contract = new Contract(orderBookAddress);
+
+  const args = [
+    new Address(trader).toScVal(),
+    xdr.ScVal.scvBytes(Buffer.from(BigInt(commitment).toString(16).padStart(64, '0'), 'hex')),
+  ];
+
+  const tx = new TransactionBuilder(account, {
+    fee: '1000000',
+    networkPassphrase: passphrase,
+  })
+    .addOperation(contract.call('cancel', ...args))
     .setTimeout(300)
     .build();
 

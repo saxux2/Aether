@@ -6,7 +6,8 @@ import { apiClient } from '@/utils/api';
 import { useOrdersStore } from '@/store/ordersSlice';
 import { useWalletStore } from '@/store/walletSlice';
 import type { GeneratedProofs } from '@/lib/sdk/types';
-import { buildOrderTx, signWithFreighter } from '@/utils/stellar';
+import { buildOrderTx, buildCancelTx, signWithFreighter } from '@/utils/stellar';
+import { computeEscrowAmount } from '@/utils/constants';
 
 const FINAL_STATUSES = new Set(['settled', 'expired', 'cancelled']);
 
@@ -101,16 +102,11 @@ export function useOrders() {
       const expiresInSeconds = Math.max(0, params.expiresAt - Math.floor(Date.now() / 1000));
 
       // Build relayer-compatible payload (field names match relayer/src/routes/orders.ts)
-      const PRICE_SCALE = 1_000_000n;
       const payload = {
         trader_address: address,
         asset_in: params.direction === 'buy' ? 'USDC' : 'XLM',
         asset_out: params.direction === 'buy' ? 'XLM' : 'USDC',
-        // buy: deposit USDC = quantity_xlm_stroops * price / PRICE_SCALE
-        // sell: deposit XLM stroops directly
-        amount_in: params.direction === 'buy'
-          ? ((params.quantity * params.price) / PRICE_SCALE).toString()
-          : params.quantity.toString(),
+        amount_in: computeEscrowAmount(params.direction, params.quantity, params.price).toString(),
         expires_in_seconds: expiresInSeconds,
         commitment: params.proofs.commitment,
         nullifier: params.proofs.nullifier,
@@ -153,10 +149,26 @@ export function useOrders() {
 
   const cancelMutation = useMutation({
     mutationFn: async (orderId: string) => {
-      // Cancel requires a signed Soroban XDR — for now send empty (relayer will
-      // handle gracefully; real cancel flows need a separate signing step)
+      if (!address) throw new Error('Wallet not connected');
+
+      // Cancelling reclaims escrowed funds on-chain (OrderBook.cancel), so it
+      // needs the order's commitment and a fresh Freighter signature — not
+      // just a relayer DB update. The commitment is only known locally (the
+      // relayer's GET /api/orders response never returns it in a form we can
+      // sign against), so this only works for orders this session placed or
+      // has already seen; after a hard refresh with no local copy, there's
+      // nothing to sign and we fail loudly instead of sending a bogus empty
+      // XDR that would silently 500 on the relayer.
+      const local = localOrders.find((o) => o.id === orderId || o.commitment === orderId);
+      if (!local) {
+        throw new Error('Cannot cancel: this order was not placed in the current session.');
+      }
+
+      const unsignedXdr = await buildCancelTx(address, local.commitment);
+      const signedXdr = await signWithFreighter(unsignedXdr);
+
       await apiClient.delete(`/api/orders/${orderId}`, {
-        data: { signed_cancel_xdr: '' },
+        data: { signed_cancel_xdr: signedXdr },
       });
       return orderId;
     },
