@@ -18,7 +18,7 @@ if ! command -v "$CIRCOM_BIN" &>/dev/null; then
 fi
 echo "==> Using circom: $("$CIRCOM_BIN" --version)"
 
-for CIRC in order_commitment balance_proof range_proof; do
+for CIRC in order_commitment balance_proof range_proof match_proof; do
   echo "==> Compiling ${CIRC}.circom..."
   "$CIRCOM_BIN" "${CIRC}.circom" --r1cs --wasm --sym -o build/ -l "$LIB_PATH"
   # Flatten WASM from JS subdir to build/ for snarkjs

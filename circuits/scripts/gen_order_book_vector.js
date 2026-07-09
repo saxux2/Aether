@@ -1,0 +1,137 @@
+/**
+ * Generate REAL order_commitment + balance_proof + range_proof proofs for a
+ * single, self-consistent sell order, and emit Rust const byte arrays (in
+ * Stellar's BN254 wire encoding, matching zk_verifier's convention) for the
+ * order_book contract's integration tests.
+ *
+ * A sell order is used (asset_in = XLM) so amount_in == quantity directly,
+ * keeping the fixture simple — see OrderInputs.escrowAmount in the frontend
+ * SDK for why buy orders need a different amount_in.
+ *
+ * Output: contracts/order_book/src/test_vector.rs — consumed by
+ * order_book's own #[cfg(test)] module for a real submit_order happy-path
+ * test, which is the only way to actually exercise the balance/range
+ * proof <-> amount_in/commitment binding checks added to order_book.rs
+ * end-to-end rather than just at the circuit level.
+ */
+const path = require('path');
+const fs = require('fs');
+const snarkjs = require('snarkjs');
+const circomlibjs = require('circomlibjs');
+
+const BUILD = path.join(__dirname, '..', 'build');
+
+function be32(dec) {
+  return BigInt(dec).toString(16).padStart(64, '0');
+}
+function g1Hex(p) {
+  return be32(p[0]) + be32(p[1]);
+}
+function g2Hex(p) {
+  return be32(p[0][1]) + be32(p[0][0]) + be32(p[1][1]) + be32(p[1][0]);
+}
+function hexToArr(h) {
+  const b = [];
+  for (let i = 0; i < h.length; i += 2) b.push(parseInt(h.substr(i, 2), 16));
+  return b;
+}
+function arr(h) {
+  return `[${hexToArr(h).join(',')}]`;
+}
+
+async function main() {
+  const poseidon = await circomlibjs.buildPoseidon();
+  const F = poseidon.F;
+
+  // ── Order fields (sell 500 XLM at $0.14, well within [1000, 10_000_000]) ──
+  const price = 140_000n;
+  const quantity = 500n * 10_000_000n; // 500 XLM in stroops
+  const direction = 1n; // sell
+  const salt = 424242n;
+  const secret = 13_579_246_801n;
+  const nonce = 1_000_000_007n;
+  const amountIn = quantity; // sell order: escrow amount == XLM quantity
+
+  const commitment = F.toString(poseidon([price, quantity, direction, salt]));
+  const nullifier = F.toString(poseidon([secret, nonce]));
+
+  // ── 1. OrderCommitment ────────────────────────────────────────────────
+  const orderRes = await snarkjs.groth16.fullProve(
+    { price: price.toString(), quantity: quantity.toString(), direction: direction.toString(),
+      salt: salt.toString(), commitment },
+    path.join(BUILD, 'order_commitment_js', 'order_commitment.wasm'),
+    path.join(BUILD, 'order_commitment_final.zkey')
+  );
+
+  // ── 2. BalanceProof ────────────────────────────────────────────────────
+  const balanceRes = await snarkjs.groth16.fullProve(
+    { secret: secret.toString(), balance: (amountIn * 2n).toString(),
+      quantity: amountIn.toString(), nonce: nonce.toString(),
+      nullifier, minimum_balance: amountIn.toString() },
+    path.join(BUILD, 'balance_proof_js', 'balance_proof.wasm'),
+    path.join(BUILD, 'balance_proof_final.zkey')
+  );
+
+  // ── 3. RangeProof ──────────────────────────────────────────────────────
+  const rangeRes = await snarkjs.groth16.fullProve(
+    { price: price.toString(), quantity: quantity.toString(), direction: direction.toString(),
+      salt: salt.toString(), price_min: '1000', price_max: '10000000', commitment },
+    path.join(BUILD, 'range_proof_js', 'range_proof.wasm'),
+    path.join(BUILD, 'range_proof_final.zkey')
+  );
+
+  // Sanity: verify all three off-chain before baking them into a Rust fixture.
+  const vkOrder = JSON.parse(fs.readFileSync(path.join(BUILD, 'order_commitment_vk.json'), 'utf8'));
+  const vkBalance = JSON.parse(fs.readFileSync(path.join(BUILD, 'balance_proof_vk.json'), 'utf8'));
+  const vkRange = JSON.parse(fs.readFileSync(path.join(BUILD, 'range_proof_vk.json'), 'utf8'));
+  const okOrder = await snarkjs.groth16.verify(vkOrder, orderRes.publicSignals, orderRes.proof);
+  const okBalance = await snarkjs.groth16.verify(vkBalance, balanceRes.publicSignals, balanceRes.proof);
+  const okRange = await snarkjs.groth16.verify(vkRange, rangeRes.publicSignals, rangeRes.proof);
+  if (!okOrder || !okBalance || !okRange) {
+    throw new Error(`off-chain verify FAILED: order=${okOrder} balance=${okBalance} range=${okRange}`);
+  }
+
+  const proofConst = (name, proof) => `
+pub const ${name}_PI_A: [u8; 64] = ${arr(g1Hex(proof.pi_a))};
+pub const ${name}_PI_B: [u8; 128] = ${arr(g2Hex(proof.pi_b))};
+pub const ${name}_PI_C: [u8; 64] = ${arr(g1Hex(proof.pi_c))};`;
+
+  const signalsConst = (name, signals) => `
+pub const ${name}_SIGNALS: [[u8; 32]; ${signals.length}] = [
+    ${signals.map(s => arr(be32(s))).join(',\n    ')}
+];`;
+
+  const vkConst = (name, vk) => `
+pub const ${name}_VK_ALPHA: [u8; 64] = ${arr(g1Hex(vk.vk_alpha_1))};
+pub const ${name}_VK_BETA: [u8; 128] = ${arr(g2Hex(vk.vk_beta_2))};
+pub const ${name}_VK_GAMMA: [u8; 128] = ${arr(g2Hex(vk.vk_gamma_2))};
+pub const ${name}_VK_DELTA: [u8; 128] = ${arr(g2Hex(vk.vk_delta_2))};
+pub const ${name}_VK_IC: [[u8; 64]; ${vk.IC.length}] = [
+    ${vk.IC.map(p => arr(g1Hex(p))).join(',\n    ')}
+];`;
+
+  const rs = `// AUTO-GENERATED by circuits/scripts/gen_order_book_vector.js — do not edit.
+// Real order_commitment + balance_proof + range_proof proofs (and their
+// verification keys) for one self-consistent sell order (500 XLM @ $0.14),
+// Stellar BN254 wire encoding.
+${proofConst('ORDER', orderRes.proof)}
+${signalsConst('ORDER', orderRes.publicSignals)}
+${vkConst('ORDER', vkOrder)}
+${proofConst('BALANCE', balanceRes.proof)}
+${signalsConst('BALANCE', balanceRes.publicSignals)}
+${vkConst('BALANCE', vkBalance)}
+${proofConst('RANGE', rangeRes.proof)}
+${signalsConst('RANGE', rangeRes.publicSignals)}
+${vkConst('RANGE', vkRange)}
+
+pub const COMMITMENT: [u8; 32] = ${arr(be32(commitment))};
+pub const NULLIFIER: [u8; 32] = ${arr(be32(nullifier))};
+pub const AMOUNT_IN: i128 = ${amountIn.toString()};
+`;
+
+  const rsPath = path.join(__dirname, '..', '..', 'contracts', 'order_book', 'src', 'test_vector.rs');
+  fs.writeFileSync(rsPath, rs);
+  console.log('off-chain verify: OK (order, balance, range)');
+  console.log('wrote', rsPath);
+}
+main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
