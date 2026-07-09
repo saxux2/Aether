@@ -4,36 +4,86 @@ name: Keep relayer warm
 # the next visitor eats a ~30s cold start. This pings the health endpoint every
 # ~10 min to keep the instance awake. GitHub's scheduled runs can lag several
 # minutes under load, so 10m (not 14m) leaves margin under the ~15m sleep window.
+#
+# Also doubles as the only real alerting this project has: a sustained
+# degraded/down relayer files (or updates) a tracking GitHub Issue instead of
+# just leaving a soft warning annotation nobody would see in real time. See
+# INCIDENT_RESPONSE.md for what to do once that issue shows up.
 on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch: {}
 
-permissions: {}
+permissions:
+  issues: write
 
 jobs:
   ping:
     name: Ping relayer health endpoint
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELAYER_URL: ${{ vars.RELAYER_URL || 'https://aether-w5p8.onrender.com' }}
+      INCIDENT_LABEL: relayer-degraded
     steps:
       - name: Curl /api/health
-        env:
-          RELAYER_URL: ${{ vars.RELAYER_URL || 'https://aether-w5p8.onrender.com' }}
+        id: health
         run: |
           set -uo pipefail
           url="${RELAYER_URL%/}/api/health"
           echo "==> Pinging $url"
           # --max-time 60 covers a full cold start; --retry rides out the spin-up.
-          # Any HTTP response means the dyno woke, which is the whole point — so we
-          # only fail on a connection-level error (curl exit != 0), not on a non-2xx.
           code=$(curl -sS --max-time 60 --retry 3 --retry-all-errors --retry-delay 10 \
-                   -o /tmp/health.json -w '%{http_code}' "$url") || {
-            echo "::error::relayer did not respond (connection error)"
-            exit 1
-          }
-          echo "HTTP $code"
-          cat /tmp/health.json || true
+                   -o /tmp/health.json -w '%{http_code}' "$url")
+          curl_exit=$?
+          echo "HTTP $code (curl exit $curl_exit)"
+          cat /tmp/health.json 2>/dev/null || echo '{}' > /tmp/health.json
           echo
-          if [ "$code" -ge 500 ]; then
+
+          if [ "$curl_exit" -ne 0 ]; then
+            echo "degraded=true" >> "$GITHUB_OUTPUT"
+            echo "summary=Relayer did not respond (connection error, curl exit $curl_exit)" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -ge 500 ]; then
             echo "::warning::relayer awake but health is degraded (HTTP $code)"
+            echo "degraded=true" >> "$GITHUB_OUTPUT"
+            body=$(cat /tmp/health.json)
+            echo "summary=Relayer health check returned HTTP $code: $body" >> "$GITHUB_OUTPUT"
+          else
+            echo "degraded=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # File (or leave alone if already filed) a tracking issue on sustained
+      # degradation. This job runs every ~10 min, so a single blip files an
+      # issue promptly — see INCIDENT_RESPONSE.md's triage steps before
+      # assuming the worst; Render free-tier cold starts can occasionally
+      # still exceed the retry budget above under heavy load.
+      - name: File or update incident issue
+        if: steps.health.outputs.degraded == 'true'
+        run: |
+          set -uo pipefail
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$INCIDENT_LABEL" --state open --json number --jq '.[0].number // empty')
+          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body "Still degraded at $ts: ${{ steps.health.outputs.summary }}"
+          else
+            body=$(printf 'Detected by the keepalive workflow (runs every ~10 min).\n\n**Status:** %s\n\nSee INCIDENT_RESPONSE.md -> "Relayer down or degraded" for triage steps.\nThis issue will get a new comment on each subsequent failed check, and should be\nclosed manually once resolved (auto-close-on-recovery is deliberately not\nimplemented -- closing is a human confirming the fix, not just one good check).' "${{ steps.health.outputs.summary }}")
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Relayer degraded/unreachable ($ts)" \
+              --label "$INCIDENT_LABEL" \
+              --body "$body"
+          fi
+
+      # Auto-remediating signal: if a tracking issue is open and the relayer
+      # is healthy again, leave a note (but still require a human to close
+      # it — one good health check isn't proof the underlying cause is
+      # actually fixed).
+      - name: Note recovery on any open incident issue
+        if: steps.health.outputs.degraded == 'false'
+        run: |
+          set -uo pipefail
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$INCIDENT_LABEL" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body "Health check passed again at $(date -u +%Y-%m-%dT%H:%M:%SZ). Leaving open for a human to confirm the underlying cause is resolved before closing."
           fi
