@@ -12,12 +12,21 @@ interface ProofBundle {
   range_public_signals: string[];
 }
 
-/** Load a verification key JSON from the circuits build directory. */
-function loadVKey(name: string): Record<string, unknown> | null {
+/**
+ * Load a verification key JSON from the circuits build directory. Throws
+ * (rather than returning null) when the file is missing — an earlier
+ * version treated a missing VKey as "skip verification, accept everything,"
+ * which silently disabled all off-chain proof checking on a misconfigured
+ * host (circuits not shipped alongside the relayer). Failing closed here
+ * means a misconfigured relayer refuses to serve rather than accepting
+ * arbitrary proof blobs. The on-chain ZKVerifier contract is the true,
+ * unbypassable gate either way — this is defense in depth, not the only
+ * check — but "defense in depth that's silently off" isn't defense in depth.
+ */
+function loadVKey(name: string): Record<string, unknown> {
   const vkPath = path.join(config.CIRCUITS_DIR, `${name}_vk.json`);
   if (!fs.existsSync(vkPath)) {
-    console.warn(`[ProofVerifier] VKey not found at ${vkPath} — using stub (always passes)`);
-    return null;
+    throw new Error(`[ProofVerifier] VKey not found at ${vkPath} — refusing to start proof verification`);
   }
   return JSON.parse(fs.readFileSync(vkPath, 'utf8')) as Record<string, unknown>;
 }
@@ -36,9 +45,6 @@ function getVKeys() {
 /** Verify all three proofs off-chain before broadcasting the Soroban tx. */
 export async function verifyAllProofs(bundle: ProofBundle): Promise<boolean> {
   const { vkOrder, vkBalance, vkRange } = getVKeys();
-
-  // If VKeys not compiled yet, skip off-chain verification (on-chain stub returns true)
-  if (!vkOrder || !vkBalance || !vkRange) return true;
 
   const snarkjs = await import('snarkjs');
 

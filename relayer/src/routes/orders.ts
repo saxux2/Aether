@@ -1,11 +1,39 @@
 import { Router, Request, Response } from 'express';
+import { Keypair } from '@stellar/stellar-sdk';
 import { SorobanService } from '../services/soroban';
 import { verifyAllProofs } from '../services/proofVerifier';
 import { getCurrentBatch, insertOrder, getOrder, updateOrderStatus, getOrdersByTrader } from '../db/queries';
 import { Match } from '../db/models';
 import { config } from '../config';
+import {
+  decodeInvocation,
+  scValToAddress,
+  scValToBytesHex,
+  scValToBigInt,
+  fieldElementMatchesBytesHex,
+} from '../services/txInspect';
 
 export const ordersRouter = Router();
+
+const TRADER_SECRET_MESSAGE_PREFIX = 'zk-dark-pool-secret-v1:';
+
+/**
+ * Verify the caller controls `trader`'s key via the same deterministic
+ * signature the frontend already produces once at connect time (see
+ * frontend/src/utils/stellar.ts deriveTraderSecret) — no extra Freighter
+ * prompt needed, but a caller who only knows the public address (and not
+ * the private key) cannot forge this.
+ */
+function verifyTraderProof(trader: string, proof: unknown): boolean {
+  if (typeof proof !== 'string' || proof.length === 0) return false;
+  try {
+    const message = Buffer.from(`${TRADER_SECRET_MESSAGE_PREFIX}${trader}`);
+    const signature = Buffer.from(proof, 'base64');
+    return Keypair.fromPublicKey(trader).verify(message, signature);
+  } catch {
+    return false;
+  }
+}
 
 // POST /api/orders/submit
 ordersRouter.post('/submit', async (req: Request, res: Response) => {
@@ -29,6 +57,25 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
       signed_transaction_xdr,
     } = req.body;
 
+    // Basic shape validation — fail with a clear 400 instead of an opaque
+    // 500 deep inside proof verification or XDR decoding.
+    const requiredStrings: Record<string, unknown> = {
+      trader_address, asset_in, asset_out, amount_in, commitment, nullifier,
+      revealed_price, signed_transaction_xdr,
+    };
+    for (const [key, value] of Object.entries(requiredStrings)) {
+      if (typeof value !== 'string' || value.length === 0) {
+        return res.status(400).json({ error: `${key} is required` });
+      }
+    }
+    if (
+      !Array.isArray(order_public_signals) || !Array.isArray(balance_public_signals) ||
+      !Array.isArray(range_public_signals) ||
+      !order_proof || !balance_proof || !range_proof
+    ) {
+      return res.status(400).json({ error: 'proofs and public signals are required' });
+    }
+
     // Validate trading pair
     if (!(
       (asset_in === 'XLM' && asset_out === 'USDC') ||
@@ -38,7 +85,15 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
     }
 
     // Validate order size
-    const amountBig = BigInt(amount_in);
+    let amountBig: bigint;
+    try {
+      amountBig = BigInt(amount_in);
+    } catch {
+      return res.status(400).json({ error: 'amount_in must be an integer string' });
+    }
+    if (amountBig <= 0n) {
+      return res.status(400).json({ error: 'amount_in must be positive' });
+    }
     if (asset_in === 'XLM') {
       const xlmAmount = Number(amountBig) / 1e7;
       if (xlmAmount < config.MIN_ORDER_SIZE_XLM) {
@@ -47,6 +102,26 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
       if (xlmAmount > config.MAX_ORDER_SIZE_XLM) {
         return res.status(400).json({ error: `Maximum order size is ${config.MAX_ORDER_SIZE_XLM} XLM` });
       }
+    }
+
+    // ── Bind the request body to the proofs' own public signals ─────────────
+    // Without this, the body's commitment/nullifier/amount_in are just
+    // unverified JSON — a caller could submit proofs that are individually
+    // valid (order/range proofs are self-provable knowledge-of-preimage
+    // proofs for any price/quantity/salt an attacker chooses) alongside
+    // claims that don't match what they actually prove. Signal layout
+    // mirrors order_book.rs's on-chain check exactly.
+    if (!order_public_signals[1] || BigInt(order_public_signals[1]) !== BigInt(commitment)) {
+      return res.status(400).json({ error: 'order proof commitment does not match request' });
+    }
+    if (!balance_public_signals[0] || BigInt(balance_public_signals[0]) !== BigInt(nullifier)) {
+      return res.status(400).json({ error: 'balance proof nullifier does not match request' });
+    }
+    if (!balance_public_signals[1] || BigInt(balance_public_signals[1]) !== amountBig) {
+      return res.status(400).json({ error: 'balance proof minimum_balance does not match amount_in' });
+    }
+    if (!range_public_signals[2] || BigInt(range_public_signals[2]) !== BigInt(commitment)) {
+      return res.status(400).json({ error: 'range proof commitment does not match request' });
     }
 
     // Off-chain proof pre-verification (fast reject before on-chain cost)
@@ -58,6 +133,38 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
 
     if (!proofValid) {
       return res.status(400).json({ error: 'Invalid ZK proof' });
+    }
+
+    // ── Bind the request body to what the signed transaction actually does ──
+    // Decoding the tx and checking it invokes OrderBook.submit_order with
+    // matching args means the DB record we're about to write can only ever
+    // describe a real, on-chain, ZK-gated order that actually moved funds
+    // into escrow — never an unrelated "cheap throwaway" transaction signed
+    // with the attacker's own key.
+    let invocation;
+    try {
+      invocation = decodeInvocation(signed_transaction_xdr);
+    } catch (err) {
+      return res.status(400).json({ error: `Could not decode signed_transaction_xdr: ${err instanceof Error ? err.message : String(err)}` });
+    }
+    if (invocation.contractId !== config.ORDER_BOOK_ADDRESS) {
+      return res.status(400).json({ error: 'signed transaction does not target OrderBook' });
+    }
+    if (invocation.functionName !== 'submit_order') {
+      return res.status(400).json({ error: 'signed transaction is not submit_order' });
+    }
+    const [argTrader, argCommitment, argNullifier, , , argAmountIn] = invocation.args;
+    if (!argTrader || scValToAddress(argTrader) !== trader_address) {
+      return res.status(400).json({ error: 'signed transaction trader does not match request' });
+    }
+    if (!argCommitment || !fieldElementMatchesBytesHex(commitment, scValToBytesHex(argCommitment))) {
+      return res.status(400).json({ error: 'signed transaction commitment does not match request' });
+    }
+    if (!argNullifier || !fieldElementMatchesBytesHex(nullifier, scValToBytesHex(argNullifier))) {
+      return res.status(400).json({ error: 'signed transaction nullifier does not match request' });
+    }
+    if (!argAmountIn || scValToBigInt(argAmountIn) !== amountBig) {
+      return res.status(400).json({ error: 'signed transaction amount_in does not match request' });
     }
 
     // Broadcast pre-signed Soroban transaction
@@ -105,15 +212,20 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[orders/submit]', msg);
-    return res.status(500).json({ error: msg });
+    return res.status(500).json({ error: 'Order submission failed' });
   }
 });
 
 ordersRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const { trader } = req.query;
+    const { trader, proof } = req.query;
     if (!trader || typeof trader !== 'string') {
       return res.status(400).json({ error: 'trader query param is required' });
+    }
+    // Order history includes not-yet-matched orders' revealed price — only
+    // the trader who can prove they hold this address's key may read it.
+    if (!verifyTraderProof(trader, proof)) {
+      return res.status(401).json({ error: 'Missing or invalid trader proof' });
     }
 
     const orders = await getOrdersByTrader(trader);
@@ -216,7 +328,8 @@ ordersRouter.get('/', async (req: Request, res: Response) => {
 
     return res.json({ orders: result });
   } catch (err: unknown) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[orders/list]', err instanceof Error ? err.message : String(err));
+    return res.status(500).json({ error: 'Failed to load orders' });
   }
 });
 
@@ -269,7 +382,8 @@ ordersRouter.get('/:commitment', async (req: Request, res: Response) => {
       settled_usdc: matches.length ? (Number(settledUsdc) / Number(STROOPS)).toFixed(2) : null,
     });
   } catch (err: unknown) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[orders/get]', err instanceof Error ? err.message : String(err));
+    return res.status(500).json({ error: 'Failed to load order' });
   }
 });
 
@@ -277,12 +391,46 @@ ordersRouter.get('/:commitment', async (req: Request, res: Response) => {
 ordersRouter.delete('/:commitment', async (req: Request, res: Response) => {
   try {
     const { signed_cancel_xdr } = req.body;
+    if (typeof signed_cancel_xdr !== 'string' || signed_cancel_xdr.length === 0) {
+      return res.status(400).json({ error: 'signed_cancel_xdr is required' });
+    }
+
+    const order = await getOrder(req.params.commitment);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    // ── Bind the signed transaction to THIS commitment ──────────────────────
+    // Without this, any successfully-broadcastable transaction (signed with
+    // an attacker's own, unrelated key) could be submitted here while the
+    // URL names a victim's commitment, and the relayer would mark the
+    // victim's still-escrowed order cancelled in its own bookkeeping even
+    // though EscrowVault's real funds never moved.
+    let invocation;
+    try {
+      invocation = decodeInvocation(signed_cancel_xdr);
+    } catch (err) {
+      return res.status(400).json({ error: `Could not decode signed_cancel_xdr: ${err instanceof Error ? err.message : String(err)}` });
+    }
+    if (invocation.contractId !== config.ORDER_BOOK_ADDRESS) {
+      return res.status(400).json({ error: 'signed transaction does not target OrderBook' });
+    }
+    if (invocation.functionName !== 'cancel') {
+      return res.status(400).json({ error: 'signed transaction is not cancel' });
+    }
+    const [argTrader, argCommitment] = invocation.args;
+    if (!argTrader || scValToAddress(argTrader) !== order.traderAddress) {
+      return res.status(400).json({ error: 'signed transaction trader does not match order' });
+    }
+    if (!argCommitment || !fieldElementMatchesBytesHex(req.params.commitment, scValToBytesHex(argCommitment))) {
+      return res.status(400).json({ error: 'signed transaction commitment does not match URL' });
+    }
+
     const soroban = new SorobanService();
     const txHash = await soroban.broadcastTransaction(signed_cancel_xdr);
     await soroban.waitForConfirmation(txHash);
     await updateOrderStatus(req.params.commitment, 'cancelled');
     return res.json({ success: true, tx_hash: txHash });
   } catch (err: unknown) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[orders/cancel]', err instanceof Error ? err.message : String(err));
+    return res.status(500).json({ error: 'Cancel failed' });
   }
 });
