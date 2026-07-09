@@ -10,6 +10,7 @@ import {
   markMatchFailed,
   updateBatchStats,
 } from '../db/queries';
+import { recordCycleStart, recordCycleSuccess, recordCycleFailure } from './batchAuctionStatus';
 
 export class BatchAuctionService {
   private soroban = new SorobanService();
@@ -21,7 +22,10 @@ export class BatchAuctionService {
     this.running = true;
     console.log(`[BatchAuction] Starting — interval: ${config.BATCH_INTERVAL_SECONDS}s`);
     this.intervalId = setInterval(
-      () => this.runBatchCycle().catch(err => console.error('[BatchAuction] Cycle error:', err)),
+      () => this.runBatchCycle().catch(err => {
+        console.error('[BatchAuction] Cycle error:', err);
+        recordCycleFailure(err);
+      }),
       config.BATCH_INTERVAL_SECONDS * 1_000
     );
   }
@@ -33,6 +37,7 @@ export class BatchAuctionService {
 
   async runBatchCycle(): Promise<void> {
     console.log('[BatchAuction] Starting matching cycle...');
+    recordCycleStart();
 
     const { closed_batch_id } = await closeBatchAndOpenNew();
     const expired = await expireStaleOrders();
@@ -45,6 +50,7 @@ export class BatchAuctionService {
 
     if (activeOrders.length < 2) {
       console.log(`[Batch ${closed_batch_id}] Not enough orders — skipping`);
+      recordCycleSuccess();
       return;
     }
 
@@ -114,5 +120,10 @@ export class BatchAuctionService {
       (failedCount > 0 ? ` (${failedCount} failed)` : '') +
       `, ${Number(totalXlm) / 1e7} XLM volume`
     );
+    // The cycle itself completed even if some individual matches failed
+    // (failures are tracked per-match in the DB and don't abort the batch —
+    // "is the loop alive" is a different question from "did every match
+    // succeed", and this status is only about the former).
+    recordCycleSuccess();
   }
 }
