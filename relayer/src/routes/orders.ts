@@ -218,12 +218,17 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
 
 ordersRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const { trader, proof } = req.query;
+    const { trader } = req.query;
     if (!trader || typeof trader !== 'string') {
       return res.status(400).json({ error: 'trader query param is required' });
     }
     // Order history includes not-yet-matched orders' revealed price — only
     // the trader who can prove they hold this address's key may read it.
+    // Read from a header, not a query param: it's a non-rotating bearer
+    // credential (the same signature for the life of the session), and a
+    // GET query string ends up in server/proxy access logs and is readable
+    // by any script on the page via the Performance API — a header isn't.
+    const proof = req.header('X-Trader-Proof');
     if (!verifyTraderProof(trader, proof)) {
       return res.status(401).json({ error: 'Missing or invalid trader proof' });
     }

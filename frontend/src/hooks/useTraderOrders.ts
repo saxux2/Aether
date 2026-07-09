@@ -37,11 +37,20 @@ export function useTraderOrders(address: string | null, connected: boolean) {
   return useQuery<ApiOrder[]>({
     queryKey: ['trader-orders', address],
     queryFn: async () => {
-      // `proof` lets the relayer verify we actually control `address`'s key
-      // before returning order history (which includes not-yet-matched
-      // orders' revealed price) — see deriveTraderSecret's doc comment.
+      // X-Trader-Proof lets the relayer verify we actually control
+      // `address`'s key before returning order history (which includes
+      // not-yet-matched orders' revealed price) — see deriveTraderSecret's
+      // doc comment. Sent as a header, not a query param: it's a
+      // non-rotating bearer credential (the same signature for the life of
+      // the session), and a GET query string ends up in server/proxy access
+      // logs and is readable by ANY script on the page via
+      // performance.getEntriesByType('resource') — which exposes full
+      // request URLs regardless of origin, unlike timing details, which are
+      // gated by Timing-Allow-Origin. This page loads a third-party
+      // TradingView embed script, so that's not a hypothetical co-tenant.
       const res = await apiClient.get('/api/orders', {
-        params: { trader: address, proof: traderSecretProof },
+        params: { trader: address },
+        headers: { 'X-Trader-Proof': traderSecretProof },
       });
       return (res.data.orders ?? []) as ApiOrder[];
     },
