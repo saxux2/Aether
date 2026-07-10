@@ -1,13 +1,16 @@
 name: CD
 
 # Deploys on every push to main. Contracts deploy first (opt-in — needs
-# STELLAR_SECRET_KEY, skips by default). The relayer and frontend deploy
-# unconditionally after, wired to the addresses *this run* just deployed
-# when contracts actually redeployed, falling back to the currently-live
-# addresses otherwise — so relayer/frontend keep shipping on every push
-# even on runs where contracts didn't redeploy, and a redeployed contract
-# never silently goes unused because a downstream service still points at
-# a stale address.
+# STELLAR_SECRET_KEY, skips by default) but only ever targets Stellar
+# TESTNET; its outputs feed deploy-relayer's env vars so the relayer keeps
+# pointing at whatever testnet contracts are currently live.
+#
+# deploy-frontend is separate and targets Stellar MAINNET: it deploys the
+# live production frontend (aetherstellar.vercel.app) with hardcoded mainnet
+# network config and mainnet contract addresses. It does NOT consume
+# deploy-contract's outputs — those are testnet addresses and would be
+# actively wrong on mainnet. If the mainnet contracts are ever redeployed,
+# update the addresses in the deploy-frontend step by hand.
 on:
   push:
     branches: [main]
@@ -156,10 +159,16 @@ jobs:
 
   # ────────────────────────── Deploy frontend ──────────────────────────
   deploy-frontend:
-    name: Deploy frontend (Vercel)
+    name: Deploy frontend (Vercel, mainnet)
     runs-on: ubuntu-latest
     environment: Production
-    needs: [deploy-contract, deploy-relayer]
+    needs: [deploy-relayer]
+    # No dependency on deploy-contract's outputs: that job deploys contracts
+    # to Stellar TESTNET only (see its name/comments above) and is unrelated
+    # to the mainnet contracts this frontend targets. The addresses below are
+    # the live mainnet contracts (confirmed deployed/initialized on Stellar
+    # public network) — update them here if the mainnet contracts are ever
+    # redeployed; nothing wires them automatically the way testnet's are.
     steps:
       - uses: actions/checkout@v4
 
@@ -178,21 +187,15 @@ jobs:
 
           # .vercel/project.json is gitignored; VERCEL_ORG_ID + VERCEL_PROJECT_ID
           # env vars are Vercel's documented way to skip interactive `vercel link`.
-          #
-          # Contract deploy is opt-in and skips by default (no STELLAR_SECRET_KEY),
-          # in which case deploy-contract's outputs are empty strings — fall back
-          # to the currently-live addresses (same ones ci.yml's frontend build
-          # uses) so the frontend still deploys against a real, working contract
-          # set instead of blank env vars.
           npx --yes vercel deploy --prod --yes --token "$VERCEL_TOKEN" \
-            -b NEXT_PUBLIC_ZK_VERIFIER_ADDRESS="${{ needs.deploy-contract.outputs.zk_verifier || 'CCACFEJDSARJFCKNI2FLTKSAG3UW4NMQIBJKMRAHKVAN5SYI4AV2YDHG' }}" \
-            -b NEXT_PUBLIC_ESCROW_VAULT_ADDRESS="${{ needs.deploy-contract.outputs.escrow_vault || 'CCQIBBTXXLZQMYUUXINOCCLSI7JY535JWBEG23SUR3YEPL34BJ6O5EJR' }}" \
-            -b NEXT_PUBLIC_ORDER_BOOK_ADDRESS="${{ needs.deploy-contract.outputs.order_book || 'CBHSOI5QFEG6WVNVGXMIOI4AVL2HWD6O6IQ5YA245HYDW25NBERSNAKP' }}" \
-            -b NEXT_PUBLIC_SETTLEMENT_ADDRESS="${{ needs.deploy-contract.outputs.settlement || 'CBMIPVZCCT67UOEMXLFOY4A2EWGECGU74WJQ2COGXQIPW5RS4KEECTO4' }}" \
-            -b NEXT_PUBLIC_MATCHING_ENGINE_ADDRESS="${{ needs.deploy-contract.outputs.matching_engine || 'CALBAJWC3EFVESRV3NABF6ULYTJ5SMSVTLTRFPIQPX7H2MBBLHAUXNDH' }}" \
-            -b NEXT_PUBLIC_STELLAR_NETWORK=testnet \
-            -b NEXT_PUBLIC_STELLAR_RPC_URL=https://soroban-testnet.stellar.org \
-            -b NEXT_PUBLIC_STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org \
+            -b NEXT_PUBLIC_ZK_VERIFIER_ADDRESS=CDW4JQNQKMNVLXJKI5HEOKVD4UFH3GPH2HKXPZZCHVLIGMGGVBSQJHZ7 \
+            -b NEXT_PUBLIC_ESCROW_VAULT_ADDRESS=CAJ3A27JEGOQEPAQIDJFER3QBEZQKTZJR6OF4MR726IX3NWTW3QUYWT2 \
+            -b NEXT_PUBLIC_ORDER_BOOK_ADDRESS=CAXR5KWD7EGYD5BP5TPIULBN34JGCGEPQU6XCQXPV4DWVQ6IBE6ZOSA5 \
+            -b NEXT_PUBLIC_SETTLEMENT_ADDRESS=CAPWWZPALWF4TRUV6ZBHYDFO5BJFVVJDE36WRU4AHKEJ5INB3FUHKB56 \
+            -b NEXT_PUBLIC_MATCHING_ENGINE_ADDRESS=CAOTNMFUXGRGA6QACDFVPJ4TFDDFNASWEMBCHPSVBJ3ZQSRWW5XF52H2 \
+            -b NEXT_PUBLIC_STELLAR_NETWORK=mainnet \
+            -b NEXT_PUBLIC_STELLAR_RPC_URL=https://mainnet.sorobanrpc.com \
+            -b NEXT_PUBLIC_STELLAR_HORIZON_URL=https://horizon.stellar.org \
             -b NEXT_PUBLIC_XLM_TOKEN_ADDRESS=native \
-            -b NEXT_PUBLIC_USDC_TOKEN_ADDRESS=CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA \
+            -b NEXT_PUBLIC_USDC_TOKEN_ADDRESS="${{ vars.MAINNET_USDC_TOKEN_ADDRESS }}" \
             -b NEXT_PUBLIC_RELAYER_URL="${{ vars.RELAYER_URL || 'https://aether-w5p8.onrender.com' }}"
