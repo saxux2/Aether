@@ -33,15 +33,19 @@ echo "    Deployer: $DEPLOYER_ADDRESS"
 
 # Register (or refresh) the mainnet network alias explicitly rather than
 # assuming it's already configured on this machine.
+stellar network rm "$NETWORK" >/dev/null 2>&1 || true
 stellar network add "$NETWORK" \
   --rpc-url "$STELLAR_MAINNET_RPC_URL" \
-  --network-passphrase "$PASSPHRASE" \
-  --overwrite
+  --network-passphrase "$PASSPHRASE"
 
 # There is no Friendbot on mainnet. Confirm the deployer actually has funds
-# instead of silently failing partway through five deployments.
-BALANCE_XLM=$(stellar contract invoke --id native --source "$SOURCE" --network "$NETWORK" -- balance --id "$DEPLOYER_ADDRESS" 2>/dev/null || echo "0")
-echo "    Deployer XLM balance (raw stroops): $BALANCE_XLM"
+# instead of silently failing partway through five deployments. Queried via
+# Horizon (classic account balance) rather than a Soroban contract invoke
+# against the native SAC — some free-tier RPC providers unreliably resolve
+# that lookup for accounts they haven't indexed interactions for yet, even
+# though the classic account itself is fully funded and valid.
+BALANCE_XLM=$(curl -sf "https://horizon.stellar.org/accounts/$DEPLOYER_ADDRESS" | grep -o '"balance": "[0-9.]*"' | head -1 | grep -o '[0-9.]*' || echo "0")
+echo "    Deployer XLM balance: $BALANCE_XLM"
 if [ "$BALANCE_XLM" = "0" ]; then
   echo "ERROR: deployer account has no funds (or doesn't exist on-chain yet)."
   echo "  Send real XLM to $DEPLOYER_ADDRESS from an exchange or wallet, then re-run."
@@ -59,13 +63,22 @@ deploy() {
   local NAME=$1
   local WASM="$TARGET/${NAME}.optimized.wasm"
   [ -f "$WASM" ] || WASM="$TARGET/${NAME}.wasm"
-  echo "==> Deploying $NAME from $WASM..."
+  echo "==> Deploying $NAME from $WASM..." >&2
   local ADDR
+  # --inclusion-fee overrides the CLI's 100-stroop default, which is too low
+  # to get included under real mainnet fee-market conditions (confirmed by
+  # hand: the default caused every submission to either time out or be
+  # rejected with TxInsufficientFee across five different RPC providers).
   ADDR=$(stellar contract deploy \
     --wasm "$WASM" \
     --source "$SOURCE" \
-    --network "$NETWORK")
-  echo "    $NAME: $ADDR"
+    --network "$NETWORK" \
+    --inclusion-fee 10000000)
+  if [[ ! "$ADDR" =~ ^C[A-Z0-9]{55}$ ]]; then
+    echo "ERROR: $NAME deploy did not return a valid contract address (got: '$ADDR')" >&2
+    exit 1
+  fi
+  echo "    $NAME: $ADDR" >&2
   echo "$ADDR"
 }
 
