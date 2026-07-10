@@ -14,7 +14,7 @@
 
 **Large-block XLM ↔ USDC trading where every order is sealed with a Groth16 ZK proof and matched in 60-second batch auctions — front-running is mathematically impossible.**
 
-[Live App](https://aether-frontend-ruby.vercel.app) · [Relayer API](https://aether-zpkh.onrender.com/api/health) · [Explorer](https://stellar.expert/explorer/public) · [Contracts](#-deployed-contracts) · [Architecture](#-architecture) · [Quick Start](#-quick-start)
+[Live App](https://aetherstellar.vercel.app) · [Relayer API](https://aether-zpkh.onrender.com/api/health) · [Explorer](https://stellar.expert/explorer/public) · [Contracts](#-deployed-contracts) · [Architecture](#-architecture) · [Quick Start](#-quick-start)
 
 </div>
 
@@ -393,7 +393,7 @@ pub fn get_total_volume_usdc(env) -> i128
 
 | Surface | URL |
 |---|---|
-| **Frontend (Vercel)** | https://aether-frontend-ruby.vercel.app |
+| **Frontend (Vercel)** | https://aetherstellar.vercel.app |
 | **Relayer API (Render)** | https://aether-zpkh.onrender.com |
 | **Relayer health** | https://aether-zpkh.onrender.com/api/health |
 | **Relayer status** | https://aether-zpkh.onrender.com/api/status |
@@ -578,7 +578,7 @@ STELLAR_NETWORK=mainnet
 STELLAR_RPC_URL=https://mainnet.sorobanrpc.com
 STELLAR_NETWORK_PASSPHRASE="Public Global Stellar Network ; September 2015"
 BATCH_INTERVAL_SECONDS=60
-ALLOWED_ORIGINS=https://aether-frontend-ruby.vercel.app
+ALLOWED_ORIGINS=https://aetherstellar.vercel.app
 ZK_VERIFIER_ADDRESS=CDW4JQNQKMNVLXJKI5HEOKVD4UFH3GPH2HKXPZZCHVLIGMGGVBSQJHZ7
 ESCROW_VAULT_ADDRESS=CAJ3A27JEGOQEPAQIDJFER3QBEZQKTZJR6OF4MR726IX3NWTW3QUYWT2
 ORDER_BOOK_ADDRESS=CAXR5KWD7EGYD5BP5TPIULBN34JGCGEPQU6XCQXPV4DWVQ6IBE6ZOSA5
@@ -766,6 +766,6 @@ MIT © 2026 Aether
 
 Built on Stellar Soroban · Proven by BN254 Groth16
 
-[Live App](https://aether-frontend-ruby.vercel.app) · [Relayer API](https://aether-zpkh.onrender.com/api/health) · [GitHub](https://github.com/saxux2/Aether)
+[Live App](https://aetherstellar.vercel.app) · [Relayer API](https://aether-zpkh.onrender.com/api/health) · [GitHub](https://github.com/saxux2/Aether)
 
 </div>
