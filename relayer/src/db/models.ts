@@ -37,6 +37,12 @@ const BatchSchema = new Schema<IBatch>({
   status: { type: String, enum: ['open', 'closed'], default: 'open' },
 });
 
+// getCurrentBatch() runs on the submit path and on three read routes:
+// findOne({ status: 'open' }).sort({ batchId: -1 }). Batches accrue one per
+// BATCH_INTERVAL_SECONDS (~525k/year at the default 60s), so this stops
+// being a small collection fairly quickly.
+BatchSchema.index({ status: 1, batchId: -1 });
+
 export const Batch = mongoose.model<IBatch>('Batch', BatchSchema);
 
 // ── Order ────────────────────────────────────────────────────────────────────
@@ -80,9 +86,13 @@ const OrderSchema = new Schema<IOrder>({
   stellarTxHash:  String,
 });
 
-OrderSchema.index({ status: 1 });
-OrderSchema.index({ batchId: 1 });
-OrderSchema.index({ traderAddress: 1 });
+// Index shapes follow the queries in db/queries.ts. Each of these was a
+// collection scan (or an index scan followed by an in-memory sort) before.
+// getAllActiveOrders() filters on status alone and still uses the compound
+// index below as a prefix, so nothing lost the index it had.
+OrderSchema.index({ status: 1, expiresAt: 1 });      // expireStaleOrders sweep + getAllActiveOrders
+OrderSchema.index({ batchId: 1, status: 1 });        // getActiveOrders(batchId)
+OrderSchema.index({ traderAddress: 1, submittedAt: -1 }); // getOrdersByTrader: filter + sort
 
 export const Order = mongoose.model<IOrder>('Order', OrderSchema);
 
@@ -116,6 +126,14 @@ const MatchSchema = new Schema<IMatch>({
 });
 
 MatchSchema.index({ batchId: 1 });
-MatchSchema.index({ status: 1, settledAt: -1 });
+MatchSchema.index({ status: 1, settledAt: -1 });     // getRecentTrades
+MatchSchema.index({ status: 1, createdAt: 1 });      // reconcileStalePendingMatches
+// The trade-history lookups in routes/orders.ts query
+//   { $or: [{ buyerCommitment: ... }, { sellerCommitment: ... }], status }
+// and MongoDB can only serve an $or by index union when EVERY branch is
+// indexed — one unindexed branch downgrades the whole query to a collection
+// scan, which is what both of those routes were doing on every request.
+MatchSchema.index({ buyerCommitment: 1 });
+MatchSchema.index({ sellerCommitment: 1 });
 
 export const Match = mongoose.model<IMatch>('Match', MatchSchema);
