@@ -24,6 +24,7 @@ import {
 export const ordersRouter = Router();
 
 const TRADER_SECRET_MESSAGE_PREFIX = 'zk-dark-pool-secret-v1:';
+const PRICE_SCALE = 1_000_000n; // price is micro-USDC per XLM
 
 /**
  * Verify the caller controls `trader`'s key via the same deterministic
@@ -118,14 +119,25 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
     if (priceBig <= 0n) {
       return res.status(400).json({ error: 'revealed_price must be positive' });
     }
-    if (asset_in === 'XLM') {
-      const xlmAmount = Number(amountBig) / 1e7;
-      if (xlmAmount < config.MIN_ORDER_SIZE_XLM) {
-        return res.status(400).json({ error: `Minimum order size is ${config.MIN_ORDER_SIZE_XLM} XLM` });
-      }
-      if (xlmAmount > config.MAX_ORDER_SIZE_XLM) {
-        return res.status(400).json({ error: `Maximum order size is ${config.MAX_ORDER_SIZE_XLM} XLM` });
-      }
+    // XLM-equivalent size of the order — the quantity the matcher and the
+    // public depth chart both work in. A sell escrows XLM directly; a buy
+    // escrows USDC, so convert at the order's own limit price.
+    const xlmQuantity =
+      asset_in === 'XLM'
+        ? amountBig
+        : (amountBig * PRICE_SCALE) / priceBig; // USDC -> XLM equivalent
+
+    // Bound the order in XLM terms regardless of which asset was escrowed.
+    // This check used to be nested under `if (asset_in === 'XLM')`, so buys —
+    // every USDC-denominated order — were completely unbounded: dust orders
+    // below MIN_ORDER_SIZE_XLM padded the book with unmatchable rows one per
+    // depth bucket, and there was no MAX at all on the other end.
+    const xlmAmount = Number(xlmQuantity) / 1e7;
+    if (xlmAmount < config.MIN_ORDER_SIZE_XLM) {
+      return res.status(400).json({ error: `Minimum order size is ${config.MIN_ORDER_SIZE_XLM} XLM` });
+    }
+    if (xlmAmount > config.MAX_ORDER_SIZE_XLM) {
+      return res.status(400).json({ error: `Maximum order size is ${config.MAX_ORDER_SIZE_XLM} XLM` });
     }
 
     // ── Bind the request body to the proofs' own public signals ─────────────
@@ -253,13 +265,6 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
 
     const batch = await getCurrentBatch();
     const expiresAt = new Date(Number(expiresAtSeconds) * 1000);
-
-    // Compute XLM quantity for matching
-    const PRICE_SCALE = 1_000_000n;
-    const xlmQuantity =
-      asset_in === 'XLM'
-        ? amountBig
-        : (amountBig * PRICE_SCALE) / priceBig; // USDC -> XLM equivalent
 
     // Store in DB — revealed_price is sensitive (v1 trust model)
     await insertOrder({
