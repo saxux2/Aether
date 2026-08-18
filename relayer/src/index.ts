@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
-import { config } from './config';
+import { config, assertDeploymentConfig } from './config';
 import { connectDB } from './db/connection';
 import { ordersRouter } from './routes/orders';
 import { orderbookRouter } from './routes/orderbook';
@@ -46,6 +46,10 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 });
 
 async function main() {
+  // Before anything else — a misconfigured live relayer should never reach
+  // the point of accepting orders it can't settle.
+  assertDeploymentConfig();
+
   await connectDB();
 
   // Crash-recovery: a process restart (crash, deploy, OOM) between

@@ -11,14 +11,30 @@ import type { MatchResult } from '../types';
 import { generateMatchProof } from './matchProver';
 
 export class SorobanService {
+  private static warnedAboutMissingKey = false;
+
   private server: rpc.Server;
   private keypair: Keypair;
 
   constructor() {
     this.server = new rpc.Server(config.STELLAR_RPC_URL);
-    this.keypair = config.RELAYER_SECRET_KEY
-      ? Keypair.fromSecret(config.RELAYER_SECRET_KEY)
-      : Keypair.random();
+    if (config.RELAYER_SECRET_KEY) {
+      this.keypair = Keypair.fromSecret(config.RELAYER_SECRET_KEY);
+    } else {
+      // Development only — assertDeploymentConfig() refuses to start a
+      // mainnet/production relayer without a key. The random keypair here has
+      // no funded account, so anything that signs (invokeContract, submitMatch)
+      // fails at getAccount; read-only paths still work. Say so out loud
+      // instead of letting that surface as a bare "account not found".
+      if (!SorobanService.warnedAboutMissingKey) {
+        console.warn(
+          '[Soroban] RELAYER_SECRET_KEY is not set — using an ephemeral keypair. ' +
+            'Signed contract calls (settlement) will fail.'
+        );
+        SorobanService.warnedAboutMissingKey = true;
+      }
+      this.keypair = Keypair.random();
+    }
   }
 
   get publicKey(): string {

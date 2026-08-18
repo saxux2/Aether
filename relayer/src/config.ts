@@ -41,3 +41,44 @@ export const config = {
     process.env.CIRCUITS_DIR ??
     path.join(__dirname, '../../circuits/build'),
 };
+
+/**
+ * Fail at startup on a deployment that can't actually do its job.
+ *
+ * These are all soft-defaulted above so `npm run dev` works with an empty
+ * .env, but every one of them turns into a confusing runtime failure much
+ * later if it's still empty in a real deployment:
+ *
+ *   - RELAYER_SECRET_KEY unset makes SorobanService fall back to
+ *     Keypair.random(), so submitMatch() reaches the network as an account
+ *     that has never been funded and fails with "account not found" — once
+ *     per match, forever, with nothing in the error naming the real cause.
+ *   - ORDER_BOOK_ADDRESS unset makes the submit route's
+ *     `invocation.contractId !== config.ORDER_BOOK_ADDRESS` binding check
+ *     reject every order. That fails closed, which is right, but it reads
+ *     to a trader as the relayer refusing valid orders.
+ *   - MATCHING_ENGINE_ADDRESS unset breaks settlement the same way.
+ *
+ * Gated on mainnet or NODE_ENV=production so local development is unaffected.
+ */
+export function assertDeploymentConfig(): void {
+  const isLive = config.NODE_ENV === 'production' || config.STELLAR_NETWORK === 'mainnet';
+  if (!isLive) return;
+
+  const missing = (
+    [
+      ['RELAYER_SECRET_KEY', config.RELAYER_SECRET_KEY],
+      ['ORDER_BOOK_ADDRESS', config.ORDER_BOOK_ADDRESS],
+      ['MATCHING_ENGINE_ADDRESS', config.MATCHING_ENGINE_ADDRESS],
+    ] as const
+  )
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Refusing to start on ${config.STELLAR_NETWORK} (NODE_ENV=${config.NODE_ENV}) ` +
+        `without: ${missing.join(', ')}`
+    );
+  }
+}
