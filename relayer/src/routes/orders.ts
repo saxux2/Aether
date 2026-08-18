@@ -94,6 +94,23 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
     if (amountBig <= 0n) {
       return res.status(400).json({ error: 'amount_in must be positive' });
     }
+
+    // Parse revealed_price here, not at the bottom of the handler. It was
+    // previously only turned into a BigInt *after* the escrow transaction had
+    // been broadcast and confirmed, where a non-numeric string throws
+    // SyntaxError and "0" throws RangeError on the USDC→XLM division below —
+    // either one unwinding to the catch-all 500 with the trader's funds
+    // already locked in the vault and no Order row to match, expire, or
+    // cancel them. Both are now plain 400s before anything touches the chain.
+    let priceBig: bigint;
+    try {
+      priceBig = BigInt(revealed_price);
+    } catch {
+      return res.status(400).json({ error: 'revealed_price must be an integer string' });
+    }
+    if (priceBig <= 0n) {
+      return res.status(400).json({ error: 'revealed_price must be positive' });
+    }
     if (asset_in === 'XLM') {
       const xlmAmount = Number(amountBig) / 1e7;
       if (xlmAmount < config.MIN_ORDER_SIZE_XLM) {
@@ -214,7 +231,6 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
     const expiresAt = new Date(Number(expiresAtSeconds) * 1000);
 
     // Compute XLM quantity for matching
-    const priceBig = BigInt(revealed_price);
     const PRICE_SCALE = 1_000_000n;
     const xlmQuantity =
       asset_in === 'XLM'
