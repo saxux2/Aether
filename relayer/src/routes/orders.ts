@@ -10,6 +10,7 @@ import {
   scValToAddress,
   scValToBytesHex,
   scValToBigInt,
+  scValToU64,
   fieldElementMatchesBytesHex,
 } from '../services/txInspect';
 
@@ -43,7 +44,6 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
       asset_in,
       asset_out,
       amount_in,
-      expires_in_seconds,
       commitment,
       nullifier,
       revealed_price,
@@ -153,7 +153,11 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
     if (invocation.functionName !== 'submit_order') {
       return res.status(400).json({ error: 'signed transaction is not submit_order' });
     }
+    // submit_order(trader, commitment, nullifier, asset_in, asset_out, amount_in,
+    //              order_proof, order_signals, balance_proof, balance_signals,
+    //              range_proof, range_signals, expires_at) — see order_book/src/lib.rs.
     const [argTrader, argCommitment, argNullifier, , , argAmountIn] = invocation.args;
+    const argExpiresAt = invocation.args[12];
     if (!argTrader || scValToAddress(argTrader) !== trader_address) {
       return res.status(400).json({ error: 'signed transaction trader does not match request' });
     }
@@ -167,13 +171,47 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'signed transaction amount_in does not match request' });
     }
 
+    // ── Order expiry comes from the signed transaction, never from the body ──
+    // The DB's expiresAt drives expireStaleOrders(); the on-chain expires_at
+    // drives EscrowVault.expire(). Deriving the former from the request body's
+    // `expires_in_seconds` let the two disagree — and, because that field was
+    // never validated, `parseInt(undefined) * 1000` produced an Invalid Date
+    // that Mongoose rejects *after* the escrow tx had already been broadcast
+    // and confirmed, stranding the trader's funds on-chain with no order row
+    // to ever match, expire, or cancel them. expires_at is the one submit_order
+    // argument that wasn't bound here; read it from the tx and both layers
+    // agree by construction.
+    let expiresAtSeconds: bigint;
+    try {
+      if (!argExpiresAt) throw new Error('missing expires_at argument');
+      expiresAtSeconds = scValToU64(argExpiresAt);
+    } catch {
+      return res.status(400).json({ error: 'signed transaction has no valid expires_at' });
+    }
+    const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
+    if (expiresAtSeconds <= nowSeconds) {
+      return res.status(400).json({ error: 'signed transaction expires_at is already in the past' });
+    }
+    // Cap the lifetime a client can ask for. An unbounded expiry rests an order
+    // in the book — and its escrow on-chain — indefinitely. CLOCK_SKEW_GRACE
+    // absorbs a client whose clock runs slightly ahead of ours; without it a
+    // caller that honestly asked for exactly ORDER_EXPIRY_SECONDS could be
+    // rejected for being a few seconds over.
+    const CLOCK_SKEW_GRACE_SECONDS = 300n;
+    const maxLifetime = BigInt(config.ORDER_EXPIRY_SECONDS) + CLOCK_SKEW_GRACE_SECONDS;
+    if (expiresAtSeconds - nowSeconds > maxLifetime) {
+      return res.status(400).json({
+        error: `Order lifetime exceeds the maximum of ${config.ORDER_EXPIRY_SECONDS}s`,
+      });
+    }
+
     // Broadcast pre-signed Soroban transaction
     const soroban = new SorobanService();
     const txHash = await soroban.broadcastTransaction(signed_transaction_xdr);
     await soroban.waitForConfirmation(txHash);
 
     const batch = await getCurrentBatch();
-    const expiresAt = new Date(Date.now() + parseInt(expires_in_seconds) * 1000);
+    const expiresAt = new Date(Number(expiresAtSeconds) * 1000);
 
     // Compute XLM quantity for matching
     const priceBig = BigInt(revealed_price);

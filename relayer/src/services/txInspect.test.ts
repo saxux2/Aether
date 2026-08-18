@@ -12,6 +12,7 @@ import {
   scValToAddress,
   scValToBytesHex,
   scValToBigInt,
+  scValToU64,
   fieldElementMatchesBytesHex,
 } from './txInspect';
 
@@ -53,6 +54,15 @@ describe('decodeInvocation', () => {
     );
     const decoded = decodeInvocation(buildInvokeTx('submit_order', [i128]));
     expect(scValToBigInt(decoded.args[0])).toBe(amount);
+  });
+
+  it('decodes the u64 expires_at arg exactly', () => {
+    // Order expiry is read from the signed tx, not the request body, so this
+    // decode is what binds the DB's expiresAt to EscrowVault's expires_at.
+    const expiresAt = 1_893_456_000n; // year 2030, comfortably past 2^31
+    const u64 = xdr.ScVal.scvU64(xdr.Uint64.fromString(expiresAt.toString()));
+    const decoded = decodeInvocation(buildInvokeTx('submit_order', [u64]));
+    expect(scValToU64(decoded.args[0])).toBe(expiresAt);
   });
 
   it('throws on a transaction with more than one operation', () => {

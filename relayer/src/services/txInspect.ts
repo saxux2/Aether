@@ -81,3 +81,13 @@ export function scValToBigInt(v: xdr.ScVal): bigint {
 export function fieldElementMatchesBytesHex(fieldElement: string, hexBytes: string): boolean {
   return BigInt(fieldElement) === BigInt(`0x${hexBytes}`);
 }
+
+/**
+ * Decode a u64-typed ScVal argument to a bigint. Used for submit_order's
+ * `expires_at` (a unix timestamp in seconds), which the contract stores
+ * verbatim on the DepositRecord — so this is the authoritative expiry, not
+ * whatever the JSON body claims.
+ */
+export function scValToU64(v: xdr.ScVal): bigint {
+  return BigInt(v.u64().toString());
+}
