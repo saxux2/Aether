@@ -2,7 +2,14 @@ import { Router, Request, Response } from 'express';
 import { Keypair } from '@stellar/stellar-sdk';
 import { SorobanService } from '../services/soroban';
 import { verifyAllProofs } from '../services/proofVerifier';
-import { getCurrentBatch, insertOrder, getOrder, updateOrderStatus, getOrdersByTrader } from '../db/queries';
+import {
+  getCurrentBatch,
+  insertOrder,
+  getOrder,
+  findOrderByCommitmentOrNullifier,
+  updateOrderStatus,
+  getOrdersByTrader,
+} from '../db/queries';
 import { Match } from '../db/models';
 import { config } from '../config';
 import {
@@ -222,6 +229,23 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
       });
     }
 
+    // ── Reject a replay before spending a chain round-trip on it ───────────
+    // commitment and nullifier both carry a unique index. A resubmitted order
+    // used to be discovered only by insertOrder throwing E11000 — after
+    // broadcast + waitForConfirmation had already run — which the catch-all
+    // reported as an opaque 500 "Order submission failed" rather than the 409
+    // it is. OrderBook.submit_order rejects the reused nullifier on-chain
+    // anyway; this just gets the right answer to the caller without the
+    // round-trip.
+    const existing = await findOrderByCommitmentOrNullifier(commitment, nullifier);
+    if (existing) {
+      return res.status(409).json({
+        error: 'Order already submitted',
+        order_id: existing.commitment,
+        batch_id: existing.batchId,
+      });
+    }
+
     // Broadcast pre-signed Soroban transaction
     const soroban = new SorobanService();
     const txHash = await soroban.broadcastTransaction(signed_transaction_xdr);
@@ -264,6 +288,12 @@ ordersRouter.post('/submit', async (req: Request, res: Response) => {
     });
 
   } catch (err: unknown) {
+    // Two identical submissions racing can both pass the pre-check above and
+    // reach insertOrder; the unique index is what actually decides, and the
+    // loser gets E11000. That's still a duplicate, not a server fault.
+    if (typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000) {
+      return res.status(409).json({ error: 'Order already submitted' });
+    }
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[orders/submit]', msg);
     return res.status(500).json({ error: 'Order submission failed' });

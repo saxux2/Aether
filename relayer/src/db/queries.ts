@@ -84,6 +84,20 @@ export async function getOrder(commitment: string): Promise<IOrder | null> {
   return Order.findOne({ commitment });
 }
 
+/**
+ * Look up an order by either of its two unique keys. Both `commitment` and
+ * `nullifier` carry a unique index, so a replayed submission collides on
+ * whichever it reuses; checking them together lets the submit route answer
+ * 409 up front instead of discovering the collision as an E11000 after it
+ * has already gone to the chain.
+ */
+export async function findOrderByCommitmentOrNullifier(
+  commitment: string,
+  nullifier: string
+): Promise<IOrder | null> {
+  return Order.findOne({ $or: [{ commitment }, { nullifier }] });
+}
+
 export async function updateOrderStatus(commitment: string, status: OrderStatus): Promise<void> {
   const update: Record<string, unknown> = { status };
   if (status === 'matched') update.matchedAt = new Date();
