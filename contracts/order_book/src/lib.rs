@@ -270,7 +270,25 @@ impl OrderBook {
     }
 
     /// Called by MatchingEngine once a match is validated.
+    ///
+    /// Restricted to the configured MatchingEngine address. This used to be
+    /// callable by anyone: `mark_matched` on someone else's Active order flips
+    /// it to Matched and drops it from the active index, which permanently
+    /// bricks it — `cancel` requires Active, so the trader can no longer
+    /// reclaim their escrow, and a genuine `submit_match` on that order now
+    /// panics with "order not active", so it can never trade either. The funds
+    /// stay locked in the vault until `expire` becomes callable at expires_at.
+    /// Chaining `mark_matched` then `mark_settled` walked any order to Settled
+    /// while its deposit sat untouched, desyncing OrderBook from EscrowVault
+    /// entirely. Cost to the attacker: one transaction fee per order.
+    ///
+    /// The auth pattern mirrors EscrowVault.lock_for_settlement, which has
+    /// always gated its own state transition on this same address — Soroban
+    /// authorizes a contract for the calls it makes directly, so MatchingEngine
+    /// satisfies this simply by being the caller.
     pub fn mark_matched(env: Env, commitment: BytesN<32>) {
+        Self::matching_engine(&env).require_auth();
+
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
@@ -294,8 +312,17 @@ impl OrderBook {
         Self::remove_active(&env, &commitment);
     }
 
-    /// Called by Settlement after funds are released.
+    /// Called by MatchingEngine once Settlement has released the funds.
+    ///
+    /// Restricted to the same configured address as mark_matched — see there
+    /// for what leaving this transition open costs. MatchingEngine, not
+    /// Settlement, is the caller: it is the contract that owns the whole
+    /// sequence (mark_matched -> lock_for_settlement -> settle), and it
+    /// already holds both commitments. Settlement is a leaf that only moves
+    /// funds and never learns which orders it is settling.
     pub fn mark_settled(env: Env, commitment: BytesN<32>) {
+        Self::matching_engine(&env).require_auth();
+
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
@@ -454,6 +481,49 @@ impl OrderBook {
             .unwrap_or(0)
     }
 
+    /// Register the contract allowed to drive an order's lifecycle.
+    ///
+    /// A separate admin-only setter rather than another `initialize`
+    /// parameter: MatchingEngine is deployed *after* OrderBook and takes its
+    /// address at initialize (see scripts/initialize.sh), so it does not
+    /// exist yet when OrderBook is initialized — and an already-deployed
+    /// OrderBook can adopt this without redeploying. Re-callable so the admin
+    /// can point at an upgraded MatchingEngine.
+    ///
+    /// Until this is called, mark_matched/mark_settled fail closed.
+    pub fn set_matching_engine(env: Env, admin: Address, matching_engine: Address) {
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic!("not admin");
+        }
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::MatchingEngineAddr, &matching_engine);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_EXTEND_THRESHOLD, INSTANCE_EXTEND_TO);
+    }
+
+    pub fn get_matching_engine(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::MatchingEngineAddr)
+    }
+
+    /// The configured lifecycle driver, failing closed when the admin has not
+    /// run set_matching_engine yet. Refusing to advance an order's state is
+    /// the safe direction: escrowed funds stay cancellable and expirable,
+    /// whereas an unguarded transition is what this replaces.
+    fn matching_engine(env: &Env) -> Address {
+        match env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::MatchingEngineAddr)
+        {
+            Some(addr) => addr,
+            None => panic!("matching engine not configured — call set_matching_engine"),
+        }
+    }
+
     /// Admin-only emergency switch. Pausing blocks new order submissions only.
     pub fn set_paused(env: Env, admin: Address, paused: bool) {
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
@@ -553,6 +623,8 @@ mod tests {
         trader: Address,
         commitment: BytesN<32>,
         nullifier: BytesN<32>,
+        admin: Address,
+        matching_engine: Address,
     }
 
     /// Wires up real ZKVerifier (with the real order/balance/range VKs the
@@ -621,6 +693,8 @@ mod tests {
         let order_book_id = env.register(OrderBook, ());
         let order_book = OrderBookClient::new(&env, &order_book_id);
         order_book.initialize(&admin, &zk_id, &escrow_id);
+        // mark_matched/mark_settled fail closed until this is registered.
+        order_book.set_matching_engine(&admin, &matching_engine);
 
         let trader = Address::generate(&env);
         minter.mint(&trader, &(tv::AMOUNT_IN * 2));
@@ -636,6 +710,8 @@ mod tests {
             trader,
             commitment,
             nullifier,
+            admin,
+            matching_engine,
         }
     }
 
@@ -800,5 +876,71 @@ mod tests {
         let f = setup();
         submit_with_amount(&f, tv::AMOUNT_IN);
         f.order_book.mark_settled(&f.commitment); // still Active, not Matched
+    }
+
+    #[test]
+    fn test_mark_matched_rejects_an_unauthorized_caller() {
+        let f = setup();
+        submit_with_amount(&f, tv::AMOUNT_IN);
+
+        // Drop the mocked auth: nothing has authorized the MatchingEngine
+        // address, which is precisely the position a third party is in.
+        f.env.set_auths(&[]);
+        assert!(f.order_book.try_mark_matched(&f.commitment).is_err());
+
+        // The order is untouched — still Active, still in the active index,
+        // so the trader can still cancel and reclaim their escrow.
+        let order = f.order_book.get_order(&f.commitment).unwrap();
+        assert!(order.status == OrderStatus::Active);
+        assert_eq!(f.order_book.get_active_commitments().len(), 1);
+    }
+
+    #[test]
+    fn test_mark_settled_rejects_an_unauthorized_caller() {
+        let f = setup();
+        submit_with_amount(&f, tv::AMOUNT_IN);
+        f.order_book.mark_matched(&f.commitment);
+
+        f.env.set_auths(&[]);
+        assert!(f.order_book.try_mark_settled(&f.commitment).is_err());
+
+        let order = f.order_book.get_order(&f.commitment).unwrap();
+        assert!(order.status == OrderStatus::Matched);
+    }
+
+    #[test]
+    fn test_matching_engine_is_recorded_and_rotatable() {
+        let f = setup();
+        assert_eq!(f.order_book.get_matching_engine(), Some(f.matching_engine));
+
+        // An upgraded MatchingEngine can be adopted without redeploying
+        // OrderBook.
+        let new_engine = Address::generate(&f.env);
+        f.order_book.set_matching_engine(&f.admin, &new_engine);
+        assert_eq!(f.order_book.get_matching_engine(), Some(new_engine));
+    }
+
+    #[test]
+    #[should_panic(expected = "not admin")]
+    fn test_set_matching_engine_rejects_non_admin() {
+        let f = setup();
+        let impostor = Address::generate(&f.env);
+        f.order_book.set_matching_engine(&impostor, &impostor);
+    }
+
+    #[test]
+    #[should_panic(expected = "not configured")]
+    fn test_mark_matched_fails_closed_before_callers_are_configured() {
+        // A freshly initialized OrderBook that has not yet been told who its
+        // MatchingEngine is refuses the transition rather than allowing it.
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let zk = Address::generate(&env);
+        let escrow = Address::generate(&env);
+        let id = env.register(OrderBook, ());
+        let ob = OrderBookClient::new(&env, &id);
+        ob.initialize(&admin, &zk, &escrow);
+        ob.mark_matched(&BytesN::from_array(&env, &tv::COMMITMENT));
     }
 }

@@ -15,6 +15,9 @@ pub enum DataKey {
     Admin,
     ZkVerifierAddr,
     EscrowVaultAddr,
+    /// The only address allowed to drive an order's lifecycle
+    /// (mark_matched / mark_settled).
+    MatchingEngineAddr,
     Paused,
     /// commitment -> OrderRecord
     Order(BytesN<32>),

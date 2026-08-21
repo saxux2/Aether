@@ -108,4 +108,17 @@ stellar contract invoke \
   --relayer_3 "$DEPLOYER"
 
 echo ""
+echo "==> Registering OrderBook's MatchingEngine..."
+# mark_matched/mark_settled fail closed until this runs — MatchingEngine is
+# deployed after OrderBook, so its address cannot be passed to
+# OrderBook.initialize above.
+stellar contract invoke \
+  --id "$ORDER_BOOK_ADDRESS" \
+  --source "$SOURCE" \
+  --network "$NETWORK" \
+  -- set_matching_engine \
+  --admin "$DEPLOYER" \
+  --matching_engine "$MATCHING_ENGINE_ADDRESS"
+
+echo ""
 echo "==> All contracts initialized."
