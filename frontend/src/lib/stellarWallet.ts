@@ -10,11 +10,10 @@
  * imported statically in a 'use client' file. See utils/stellar.ts for the
  * same convention used by the rest of this app.
  */
-import { Networks } from '@stellar/stellar-sdk';
 import { STELLAR_HORIZON_URL, STELLAR_NETWORK } from '@/utils/constants';
+import { isMainnet, networkPassphraseFor } from '@/utils/network';
 
-export const STELLAR_NETWORK_PASSPHRASE =
-  STELLAR_NETWORK === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+export const STELLAR_NETWORK_PASSPHRASE = networkPassphraseFor(STELLAR_NETWORK);
 export const HORIZON_URL = STELLAR_HORIZON_URL;
 
 /** Whether the Freighter browser extension is installed and reachable. */
@@ -54,7 +53,7 @@ export async function assertFreighterNetworkMatches(): Promise<void> {
   if (result.networkPassphrase !== STELLAR_NETWORK_PASSPHRASE) {
     throw new Error(
       `Freighter is set to "${result.network}", but this app is configured for ` +
-      `${STELLAR_NETWORK === 'mainnet' ? 'Stellar mainnet' : 'Stellar testnet'}. ` +
+      `${isMainnet(STELLAR_NETWORK) ? 'Stellar mainnet' : 'Stellar testnet'}. ` +
       `Switch networks in Freighter and reconnect.`
     );
   }

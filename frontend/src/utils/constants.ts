@@ -1,3 +1,5 @@
+import { isMainnet } from './network';
+
 export const RELAYER_URL =
   process.env.NEXT_PUBLIC_RELAYER_URL ?? 'http://localhost:3001';
 
@@ -34,7 +36,7 @@ export const USDC_ISSUER =
   process.env.NEXT_PUBLIC_USDC_ISSUER ?? 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 
 // Stellar.expert uses "public" (not "mainnet") as the network segment in its URLs.
-const EXPLORER_NETWORK = STELLAR_NETWORK === 'mainnet' ? 'public' : 'testnet';
+const EXPLORER_NETWORK = isMainnet(STELLAR_NETWORK) ? 'public' : 'testnet';
 
 /** Build a stellar.expert link for a tx hash, scoped to the configured network. */
 export function explorerTxUrl(hash: string): string {

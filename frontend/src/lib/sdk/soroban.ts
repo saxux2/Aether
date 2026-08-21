@@ -6,18 +6,13 @@ import {
   Asset,
   Contract,
   Horizon,
-  Networks,
   rpc,
   TransactionBuilder,
   xdr,
   Address,
 } from '@stellar/stellar-sdk';
 import type { GeneratedProofs } from './types';
-
-const NETWORKS: Record<string, string> = {
-  testnet: Networks.TESTNET,
-  mainnet: Networks.PUBLIC,
-};
+import { networkPassphraseFor, resolveNetwork } from '@/utils/network';
 
 // Horizon is the authoritative source for account sequence numbers —
 // the Soroban RPC can lag 1-2 ledgers and return a stale sequence, causing txBadSeq.
@@ -109,10 +104,10 @@ export async function buildSubmitOrderTransaction(
   params: SubmitOrderTxParams
 ): Promise<string> {
   const { rpcUrl, network = 'testnet', trader, orderBookAddress } = params;
-  const passphrase = NETWORKS[network];
+  const passphrase = networkPassphraseFor(network);
 
   const server = new rpc.Server(rpcUrl);
-  const horizon = new Horizon.Server(HORIZON_URLS[network] ?? HORIZON_URLS.testnet);
+  const horizon = new Horizon.Server(HORIZON_URLS[resolveNetwork(network)]);
   // Fetch account from Horizon — always current-ledger accurate, unlike the Soroban RPC
   // which can cache account state 1-2 ledgers behind and return a stale sequence number.
   const account = await horizon.loadAccount(trader);
@@ -174,10 +169,10 @@ export async function buildCancelOrderTransaction(
   params: CancelOrderTxParams
 ): Promise<string> {
   const { rpcUrl, network = 'testnet', trader, commitment, orderBookAddress } = params;
-  const passphrase = NETWORKS[network];
+  const passphrase = networkPassphraseFor(network);
 
   const server = new rpc.Server(rpcUrl);
-  const horizon = new Horizon.Server(HORIZON_URLS[network] ?? HORIZON_URLS.testnet);
+  const horizon = new Horizon.Server(HORIZON_URLS[resolveNetwork(network)]);
   const account = await horizon.loadAccount(trader);
   const contract = new Contract(orderBookAddress);
 

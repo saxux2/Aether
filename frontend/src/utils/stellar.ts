@@ -2,13 +2,13 @@
  * Build and sign Soroban transactions for the dark pool.
  * All functions here are browser-only (use Freighter for signing).
  */
-import { Networks } from '@stellar/stellar-sdk';
 import type { GeneratedProofs } from '@/lib/sdk/types';
 import { buildSubmitOrderTransaction, buildCancelOrderTransaction } from '@/lib/sdk/soroban';
 import { fetchSpendableXlm } from '@/lib/stellarHorizon';
 // Lives in utils/units.ts so lib/stellarHorizon.ts can use it too without
 // importing this module back (this one already imports from there).
 import { decimalToBaseUnits } from './units';
+import { networkPassphraseFor } from './network';
 import {
   STELLAR_NETWORK,
   STELLAR_RPC_URL,
@@ -20,8 +20,8 @@ import {
   computeEscrowAmount,
 } from './constants';
 
-const NETWORK_PASSPHRASE =
-  STELLAR_NETWORK === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+// Single source of truth — see utils/network.ts.
+const NETWORK_PASSPHRASE = networkPassphraseFor(STELLAR_NETWORK);
 
 /** Sign a transaction XDR using the Freighter browser extension. */
 export async function signWithFreighter(txXdr: string): Promise<string> {
