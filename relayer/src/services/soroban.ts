@@ -152,12 +152,36 @@ export class SorobanService {
     return this.invokeContract(config.MATCHING_ENGINE_ADDRESS, 'submit_match', args);
   }
 
-  async checkStellarConnection(): Promise<boolean> {
+  /**
+   * Liveness probe for the configured Soroban RPC endpoint.
+   *
+   * Bounded, because the only caller is GET /api/health and an *unbounded*
+   * probe turns a degraded dependency into a dead endpoint: a black-holed RPC
+   * host (dropped packets rather than a refused connection) leaves the request
+   * hanging with no answer at all, so the keepalive workflow's curl gives up
+   * on --max-time and reports "Relayer did not respond (connection error)" —
+   * pointing the on-call at the relayer instead of at the RPC provider that is
+   * actually down, and losing the mongodb/batch_auction fields that would have
+   * said which. Timing out into `false` reports the same 503 the endpoint
+   * already returns for an unreachable RPC, with the rest of the body intact.
+   */
+  async checkStellarConnection(timeoutMs = 5_000): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // .catch() on the probe itself, not around the race: once the timeout has
+    // won, a later rejection from getLatestLedger() would have nothing awaiting
+    // it, and index.ts escalates an unhandled rejection to process.exit(1) —
+    // a health check that kills the relayer it is checking.
+    const probe = this.server
+      .getLatestLedger()
+      .then(() => true)
+      .catch(() => false);
+    const timedOut = new Promise<false>(resolve => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
     try {
-      await this.server.getLatestLedger();
-      return true;
-    } catch {
-      return false;
+      return await Promise.race([probe, timedOut]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 }
