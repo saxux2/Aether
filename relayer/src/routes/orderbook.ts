@@ -1,10 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { getCurrentBatch, getAllActiveOrders, getRecentTrades } from '../db/queries';
 import { config } from '../config';
+import { bucketPrice } from '../services/depth';
 
 export const orderbookRouter = Router();
 
-const BUCKET_SIZE = 500n;        // $0.0005 per bucket in micro-USDC
 const PRICE_DIVISOR = 1_000_000; // micro-USDC → USDC
 const STROOP_DIVISOR = 10_000_000;
 
@@ -24,7 +24,7 @@ orderbookRouter.get('/depth', async (_req: Request, res: Response) => {
     const aggregate = (list: typeof orders, side: 'bids' | 'asks') => {
       const buckets = new Map<string, { xlm: bigint; count: number }>();
       for (const o of list) {
-        const key = ((o.revealedPrice / BUCKET_SIZE) * BUCKET_SIZE).toString();
+        const key = bucketPrice(o.revealedPrice, side).toString();
         const b = buckets.get(key) ?? { xlm: 0n, count: 0 };
         b.xlm += o.remainingQuantity; // unfilled remainder only — not original size
         b.count += 1;
