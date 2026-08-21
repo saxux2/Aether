@@ -40,6 +40,16 @@ export const config = {
 
   ALLOWED_ORIGINS: (process.env.ALLOWED_ORIGINS ?? 'http://localhost:3000').split(','),
 
+  // Number of reverse proxies in front of this process, as Express's
+  // `trust proxy` hop count. The relayer runs on Render, which terminates TLS
+  // at its own edge and forwards over X-Forwarded-For — exactly one hop. Left
+  // at 0, Express reports every request as coming from that edge address and
+  // the per-IP rate limiter degrades into one global bucket (see index.ts).
+  // Not defaulted to 1: when nothing is actually in front of the process, any
+  // caller can set X-Forwarded-For themselves and mint a fresh bucket per
+  // request, which is strictly worse than one shared bucket.
+  TRUST_PROXY_HOPS: Math.max(0, parseInt(process.env.TRUST_PROXY_HOPS ?? '0', 10) || 0),
+
   CIRCUITS_DIR:
     process.env.CIRCUITS_DIR ??
     path.join(__dirname, '../../circuits/build'),

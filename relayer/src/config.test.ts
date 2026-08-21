@@ -23,6 +23,35 @@ function loadConfigWith(env: Partial<Record<(typeof LIVE_KEYS)[number], string>>
   return require('./config') as typeof import('./config');
 }
 
+describe('TRUST_PROXY_HOPS', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.resetModules();
+  });
+
+  function loadWithHops(value: string | undefined) {
+    jest.resetModules();
+    if (value === undefined) delete process.env.TRUST_PROXY_HOPS;
+    else process.env.TRUST_PROXY_HOPS = value;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return (require('./config') as typeof import('./config')).config.TRUST_PROXY_HOPS;
+  }
+
+  it('defaults to not trusting X-Forwarded-For at all', () => {
+    expect(loadWithHops(undefined)).toBe(0);
+  });
+
+  it('reads a hop count', () => {
+    expect(loadWithHops('1')).toBe(1);
+  });
+
+  it.each(['', 'yes', '-3'])('falls back to 0 for %p rather than NaN', (value) => {
+    expect(loadWithHops(value)).toBe(0);
+  });
+});
+
 describe('assertDeploymentConfig', () => {
   const originalEnv = { ...process.env };
 

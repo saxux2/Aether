@@ -12,6 +12,25 @@ import { reconcileStalePendingMatches } from './db/queries';
 
 const app = express();
 
+// The rate limiter below buckets by client IP, and req.ip is only a client IP
+// if Express knows how many proxies to unwind from X-Forwarded-For. This
+// process runs behind Render's TLS-terminating edge (see .github/workflows/
+// deploy.yml), and with the default `trust proxy: false` every request there
+// reports that single edge address — so all traders shared ONE 20-per-minute
+// bucket and any burst, honest or not, locked out the entire pool. Trust
+// exactly the configured number of hops; TRUST_PROXY_HOPS=0 (the default, for
+// direct-to-process local runs) leaves the header untrusted, because a
+// spoofable X-Forwarded-For would be worse than a shared bucket.
+if (config.TRUST_PROXY_HOPS > 0) {
+  app.set('trust proxy', config.TRUST_PROXY_HOPS);
+} else if (config.NODE_ENV === 'production' || config.STELLAR_NETWORK === 'mainnet') {
+  console.warn(
+    '[Relayer] TRUST_PROXY_HOPS is 0 on a live deployment — if anything ' +
+      'terminates TLS in front of this process, per-IP rate limiting is ' +
+      'collapsing into a single shared bucket for every trader.'
+  );
+}
+
 app.use(cors({ origin: config.ALLOWED_ORIGINS, credentials: true }));
 app.use(express.json({ limit: '2mb' })); // proofs are large JSON payloads
 
