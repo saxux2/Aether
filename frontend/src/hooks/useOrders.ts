@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/utils/api';
 import { useOrdersStore } from '@/store/ordersSlice';
@@ -8,40 +8,9 @@ import { useWalletStore } from '@/store/walletSlice';
 import type { GeneratedProofs } from '@/lib/sdk/types';
 import { buildOrderTx, buildCancelTx, signWithFreighter } from '@/utils/stellar';
 import { computeEscrowAmount } from '@/utils/constants';
+import { patchFromServer, hasOrderChanges } from '@/utils/orderPatch';
 
 const FINAL_STATUSES = new Set(['settled', 'expired', 'cancelled']);
-
-/**
- * Build a LocalOrder patch from a relayer order-status response.
- * Written defensively: field names vary between relayer versions
- * (stellar_tx_hash vs tx_hash, settlement_price may be absent).
- */
-function patchFromServer(data: Record<string, unknown> | undefined) {
-  if (!data) return null;
-  const patch: {
-    status?: string;
-    settledAt?: string;
-    settlementTxHash?: string;
-    settlementPrice?: string;
-    filledXlm?: string;
-    refundedXlm?: string;
-    isPartial?: boolean;
-  } = {};
-  if (typeof data.status === 'string') patch.status = data.status;
-  if (typeof data.settled_at === 'string') patch.settledAt = data.settled_at;
-  // Prefer the on-chain SETTLEMENT tx for the history link; fall back to the
-  // order's submit tx only if no settlement tx is reported yet.
-  const txHash = data.settlement_tx_hash ?? data.stellar_tx_hash ?? data.tx_hash;
-  if (typeof txHash === 'string' && txHash.length > 0) patch.settlementTxHash = txHash;
-  const price = data.settlement_price ?? data.fill_price;
-  if (typeof price === 'string' && price.length > 0) {
-    patch.settlementPrice = price.replace(/[^0-9.]/g, '');
-  }
-  if (typeof data.filled_xlm === 'string') patch.filledXlm = data.filled_xlm;
-  if (typeof data.refunded_xlm === 'string') patch.refundedXlm = data.refunded_xlm;
-  if (typeof data.is_partial === 'boolean') patch.isPartial = data.is_partial;
-  return Object.keys(patch).length > 0 ? patch : null;
-}
 
 interface SubmitOrderParams {
   direction: 'buy' | 'sell';
@@ -57,18 +26,27 @@ export function useOrders() {
   const { addOrder, updateOrderStatus, updateOrder } = useOrdersStore();
   const localOrders = useOrdersStore((s) => s.orders);
 
+  // The poll reads the current orders through a ref rather than closing over
+  // them, so the interval below can depend on nothing that changes per tick.
+  // Depending on `localOrders` directly tore the interval down and rebuilt it
+  // — running poll() immediately again — on every store write.
+  const localOrdersRef = useRef(localOrders);
+  localOrdersRef.current = localOrders;
+
   // Poll the relayer every 8 s for any order that hasn't reached a terminal state.
   // This keeps the UI in sync when the batch auction settles or expires an order.
   useEffect(() => {
     const poll = async () => {
-      const pending = localOrders.filter((o) => !FINAL_STATUSES.has(o.status));
+      const pending = localOrdersRef.current.filter((o) => !FINAL_STATUSES.has(o.status));
       if (pending.length === 0) return;
       await Promise.allSettled(
         pending.map(async (o) => {
           try {
             const res = await apiClient.get(`/api/orders/${o.commitment}`);
             const patch = patchFromServer(res.data);
-            if (patch && (patch.status !== o.status || patch.settlementTxHash || patch.settledAt)) {
+            // Compare values, not presence — an identical patch must not
+            // write, because every write changes the store's array identity.
+            if (patch && hasOrderChanges(o, patch)) {
               updateOrder(o.id, patch);
             }
           } catch {
@@ -81,7 +59,7 @@ export function useOrders() {
     poll(); // immediate first check
     const id = setInterval(poll, 8_000);
     return () => clearInterval(id);
-  }, [localOrders, updateOrder]);
+  }, [updateOrder]);
 
   const submitMutation = useMutation({
     mutationFn: async (params: SubmitOrderParams) => {
