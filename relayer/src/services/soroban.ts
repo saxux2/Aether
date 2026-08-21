@@ -46,9 +46,7 @@ export class SorobanService {
     // so we skip fromXDR() which fails on Soroban footprint union types.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await this.server.sendTransaction({ toXDR: () => signedXdr } as any);
-    if (result.status === 'ERROR') {
-      throw new Error(`Transaction failed: ${JSON.stringify(result.errorResult)}`);
-    }
+    assertAccepted(result.status, result.hash, result.errorResult);
     return result.hash;
   }
 
@@ -100,9 +98,7 @@ export class SorobanService {
     prepared.sign(this.keypair);
 
     const result = await this.server.sendTransaction(prepared);
-    if (result.status === 'ERROR') {
-      throw new Error(`Contract call failed: ${JSON.stringify(result.errorResult)}`);
-    }
+    assertAccepted(result.status, result.hash, result.errorResult);
 
     await this.waitForConfirmation(result.hash);
     return result.hash;
@@ -164,6 +160,37 @@ export class SorobanService {
       return false;
     }
   }
+}
+
+/**
+ * Throw unless the RPC actually took custody of the transaction.
+ *
+ * sendTransaction answers with one of four statuses, and only ERROR used to
+ * be treated as a failure here. TRY_AGAIN_LATER — the node's queue is full,
+ * or it is still processing an earlier transaction from the same source
+ * account — is a rejection too: the transaction was NOT queued and never
+ * will be, but the response still carries a hash. Returning that hash sent
+ * the caller into waitForConfirmation(), which polled a transaction the
+ * network had never heard of for its full 30 attempts and then reported
+ * "Confirmation timeout" — a message that reads like a slow ledger and
+ * invites a retry of the confirmation rather than of the submission. On
+ * the submit path that is 30s of a trader's request spent learning nothing;
+ * in the batch loop it is 30s per match, on a loop that has to finish
+ * inside its own interval.
+ *
+ * DUPLICATE is the one non-PENDING status that is genuinely fine: the same
+ * transaction is already in flight from an earlier send, so the hash is
+ * real and polling it is exactly right.
+ */
+export function assertAccepted(status: string, hash: string, errorResult?: unknown): void {
+  if (status === 'PENDING' || status === 'DUPLICATE') return;
+  if (status === 'TRY_AGAIN_LATER') {
+    throw new Error(
+      `Soroban RPC did not accept the transaction (TRY_AGAIN_LATER) — ` +
+        `it was never queued; resubmit rather than waiting on ${hash}`
+    );
+  }
+  throw new Error(`Transaction rejected by RPC (${status}): ${JSON.stringify(errorResult)}`);
 }
 
 function sleep(ms: number) {
