@@ -5,7 +5,10 @@
 import { Networks } from '@stellar/stellar-sdk';
 import type { GeneratedProofs } from '@/lib/sdk/types';
 import { buildSubmitOrderTransaction, buildCancelOrderTransaction } from '@/lib/sdk/soroban';
-import { fetchXlmBalance } from '@/lib/stellarHorizon';
+import { fetchSpendableXlm } from '@/lib/stellarHorizon';
+// Lives in utils/units.ts so lib/stellarHorizon.ts can use it too without
+// importing this module back (this one already imports from there).
+import { decimalToBaseUnits } from './units';
 import {
   STELLAR_NETWORK,
   STELLAR_RPC_URL,
@@ -179,9 +182,12 @@ export async function getEscrowBalance(
   asset: 'XLM' | 'USDC'
 ): Promise<bigint> {
   if (asset === 'XLM') {
-    const { balance, funded } = await fetchXlmBalance(address);
-    if (!funded) return 0n;
-    return decimalToBaseUnits(balance);
+    // Spendable, not gross: a Stellar account must retain its base reserve
+    // (2 + subentries + sponsoring - sponsored, at 0.5 XLM each) plus any
+    // selling liabilities. Escrowing the gross balance reverts inside
+    // EscrowVault.deposit's token transfer — after ~30s of proof generation
+    // and a Freighter signature the trader has already paid for.
+    return fetchSpendableXlm(address);
   }
 
   const res = await fetch(`${STELLAR_HORIZON_URL}/accounts/${address}`);
@@ -197,12 +203,5 @@ export async function getEscrowBalance(
   return decimalToBaseUnits(usdcLine.balance);
 }
 
-/** Horizon always reports balances with exactly 7 decimal places. */
-export function decimalToBaseUnits(decimal: string): bigint {
-  const negative = decimal.startsWith('-');
-  const unsigned = negative ? decimal.slice(1) : decimal;
-  const [whole, frac = ''] = unsigned.split('.');
-  const fracPadded = frac.padEnd(7, '0').slice(0, 7);
-  const units = BigInt(whole || '0') * 10_000_000n + BigInt(fracPadded || '0');
-  return negative ? -units : units;
-}
+// Re-exported to keep the existing import path working.
+export { decimalToBaseUnits };
