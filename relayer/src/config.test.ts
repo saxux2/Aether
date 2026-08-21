@@ -7,10 +7,14 @@
 const LIVE_KEYS = [
   'NODE_ENV',
   'STELLAR_NETWORK',
+  'STELLAR_NETWORK_PASSPHRASE',
   'RELAYER_SECRET_KEY',
   'ORDER_BOOK_ADDRESS',
   'MATCHING_ENGINE_ADDRESS',
 ] as const;
+
+const PUBLIC_PASSPHRASE = 'Public Global Stellar Network ; September 2015';
+const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
 
 function loadConfigWith(env: Partial<Record<(typeof LIVE_KEYS)[number], string>>) {
   jest.resetModules();
@@ -30,6 +34,7 @@ describe('assertDeploymentConfig', () => {
   const live = {
     NODE_ENV: 'production',
     STELLAR_NETWORK: 'mainnet',
+    STELLAR_NETWORK_PASSPHRASE: PUBLIC_PASSPHRASE,
     RELAYER_SECRET_KEY: 'SBSECRETKEYPLACEHOLDER',
     ORDER_BOOK_ADDRESS: 'CORDERBOOK',
     MATCHING_ENGINE_ADDRESS: 'CMATCHINGENGINE',
@@ -65,10 +70,19 @@ describe('assertDeploymentConfig', () => {
     );
   });
 
+  it('refuses to start on mainnet still carrying the testnet passphrase', () => {
+    const { assertDeploymentConfig } = loadConfigWith({
+      ...live,
+      STELLAR_NETWORK_PASSPHRASE: TESTNET_PASSPHRASE,
+    });
+    expect(() => assertDeploymentConfig()).toThrow(/STELLAR_NETWORK_PASSPHRASE/);
+  });
+
   it('triggers on NODE_ENV=production even off mainnet', () => {
     const { assertDeploymentConfig } = loadConfigWith({
       ...live,
       STELLAR_NETWORK: 'testnet',
+      STELLAR_NETWORK_PASSPHRASE: TESTNET_PASSPHRASE,
       RELAYER_SECRET_KEY: '',
     });
     expect(() => assertDeploymentConfig()).toThrow('RELAYER_SECRET_KEY');

@@ -1,7 +1,6 @@
 import {
   Contract,
   Keypair,
-  Networks,
   rpc,
   TransactionBuilder,
   xdr,
@@ -78,12 +77,20 @@ export class SorobanService {
   ): Promise<string> {
     const account = await this.server.getAccount(this.keypair.publicKey());
     const contract = new Contract(contractAddress);
-    const networkPassphrase =
-      config.STELLAR_NETWORK === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
 
     const tx = new TransactionBuilder(account, {
       fee: '1000000',
-      networkPassphrase,
+      // The configured passphrase — not one re-derived from STELLAR_NETWORK.
+      // Deriving it here as `STELLAR_NETWORK === 'mainnet' ? PUBLIC : TESTNET`
+      // meant STELLAR_NETWORK_PASSPHRASE (set in .env.example, .env.mainnet,
+      // and config.ts) was never actually read by anything, so the value an
+      // operator configures and the value the relayer signs with could
+      // silently disagree. Any spelling of the live network other than the
+      // literal 'mainnet' — 'public', 'pubnet', 'PUBLIC' — signed every
+      // settlement with the *testnet* network id while STELLAR_RPC_URL pointed
+      // at mainnet, and each submit_match came back as a signature failure
+      // that names neither the network nor the passphrase.
+      networkPassphrase: config.STELLAR_NETWORK_PASSPHRASE,
     })
       .addOperation(contract.call(method, ...args))
       .setTimeout(60)

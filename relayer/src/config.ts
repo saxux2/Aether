@@ -4,6 +4,9 @@ import path from 'path';
 // resolves to the repo root when the relayer is started from there, missing CIRCUITS_DIR.
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
+/** Stellar's public-network id, spelled out so config.ts pulls in no SDK. */
+const PUBLIC_NETWORK_PASSPHRASE = 'Public Global Stellar Network ; September 2015';
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -58,12 +61,28 @@ export const config = {
  *     reject every order. That fails closed, which is right, but it reads
  *     to a trader as the relayer refusing valid orders.
  *   - MATCHING_ENGINE_ADDRESS unset breaks settlement the same way.
+ *   - STELLAR_NETWORK_PASSPHRASE left at its testnet default on a mainnet
+ *     deployment makes SorobanService sign every settlement against the wrong
+ *     network id, so the transaction is rejected for a bad signature — which
+ *     mentions neither the network nor the passphrase.
  *
  * Gated on mainnet or NODE_ENV=production so local development is unaffected.
  */
 export function assertDeploymentConfig(): void {
   const isLive = config.NODE_ENV === 'production' || config.STELLAR_NETWORK === 'mainnet';
   if (!isLive) return;
+
+  // A mainnet RPC endpoint and a testnet passphrase is never a deployment
+  // anyone meant to make; it just fails, transaction by transaction.
+  if (
+    config.STELLAR_NETWORK === 'mainnet' &&
+    config.STELLAR_NETWORK_PASSPHRASE !== PUBLIC_NETWORK_PASSPHRASE
+  ) {
+    throw new Error(
+      `Refusing to start on mainnet with STELLAR_NETWORK_PASSPHRASE=` +
+        `"${config.STELLAR_NETWORK_PASSPHRASE}" — expected "${PUBLIC_NETWORK_PASSPHRASE}"`
+    );
+  }
 
   const missing = (
     [
