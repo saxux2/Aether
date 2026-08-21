@@ -18,6 +18,7 @@ statusRouter.get('/', async (_req, res) => {
       version: process.env.npm_package_version ?? '0.1.0',
     });
   } catch (err: unknown) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[status]', err instanceof Error ? err.message : String(err));
+    return res.status(500).json({ error: 'Failed to load relayer status' });
   }
 });

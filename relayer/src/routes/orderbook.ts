@@ -56,7 +56,8 @@ orderbookRouter.get('/depth', async (_req: Request, res: Response) => {
       active_order_count: orders.length,
     });
   } catch (err: unknown) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[orderbook/depth]', err instanceof Error ? err.message : String(err));
+    return res.status(500).json({ error: 'Failed to load order book depth' });
   }
 });
 
@@ -93,7 +94,8 @@ orderbookRouter.get('/trades', async (req: Request, res: Response) => {
 
     return res.json({ trades });
   } catch (err: unknown) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[orderbook/trades]', err instanceof Error ? err.message : String(err));
+    return res.status(500).json({ error: 'Failed to load recent trades' });
   }
 });
 
@@ -117,6 +119,7 @@ orderbookRouter.get('/batch', async (_req: Request, res: Response) => {
       order_count: batch.orderCount,
     });
   } catch (err: unknown) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[orderbook/batch]', err instanceof Error ? err.message : String(err));
+    return res.status(500).json({ error: 'Failed to load current batch' });
   }
 });
