@@ -516,6 +516,22 @@ ordersRouter.delete('/:commitment', async (req: Request, res: Response) => {
     const order = await getOrder(req.params.commitment);
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
+    // ── Only a resting order can be cancelled ───────────────────────────────
+    // EscrowVault.cancel panics unless the deposit is Active, so a cancel
+    // against a matched, settled, expired, or already-cancelled order was
+    // always going to fail — but it failed the expensive way: decode the XDR,
+    // broadcast it, poll waitForConfirmation until the failure surfaces, then
+    // report a flat 500 "Cancel failed" that says nothing about why. The
+    // trader is left unable to tell a rejected cancel from a broken relayer.
+    // Answer from the row we already loaded, with the status that explains it
+    // — same reasoning as the 409 the submit route returns for a replay.
+    if (order.status !== 'active') {
+      return res.status(409).json({
+        error: `Order is ${order.status} and can no longer be cancelled`,
+        status: order.status,
+      });
+    }
+
     // ── Bind the signed transaction to THIS commitment ──────────────────────
     // Without this, any successfully-broadcastable transaction (signed with
     // an attacker's own, unrelated key) could be submitted here while the
