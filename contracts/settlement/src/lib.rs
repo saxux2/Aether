@@ -106,6 +106,25 @@ impl Settlement {
             panic!("seller deposit is not the XLM side");
         }
 
+        // Bind the payout addresses to the deposits they are being paid from.
+        // buyer_address/seller_address arrive as plain arguments and decide
+        // where real funds land: `release(buyer_nullifier, seller_address, ..)`
+        // hands the buyer's escrowed USDC to whatever address is named here.
+        // Nothing checked them, even though each DepositRecord carries the
+        // authoritative `trader` that funded it and both records are already
+        // loaded two lines up for the asset check. A MatchingEngine that
+        // passed a mismatched pair — a bug in how it reads the orders, or a
+        // future caller wired in with a different argument order — would send
+        // one trader's escrow to an unrelated address and route the refund of
+        // the unspent remainder to someone who never deposited, with the whole
+        // transfer looking perfectly well-formed on-chain.
+        if buyer_deposit.trader != buyer_address {
+            panic!("buyer address does not own the buyer deposit");
+        }
+        if seller_deposit.trader != seller_address {
+            panic!("seller address does not own the seller deposit");
+        }
+
         // Release buyer's USDC → seller receives `usdc_amount` (the cleared cost);
         // any surplus the buyer escrowed at their limit price is refunded to the buyer.
         escrow.release(&buyer_nullifier, &seller_address, &usdc_amount);
@@ -304,6 +323,44 @@ mod tests {
             &seller_nullifier,
             &f.buyer,
             &f.seller,
+            &100i128,
+            &100i128,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "buyer address does not own the buyer deposit")]
+    fn test_settle_rejects_a_payout_address_that_did_not_deposit() {
+        let f = setup();
+        let buyer_nullifier = BytesN::from_array(&f.env, &[1u8; 32]);
+        let seller_nullifier = BytesN::from_array(&f.env, &[2u8; 32]);
+        let stranger = Address::generate(&f.env);
+
+        // Same well-formed deposits, but the buyer leg is attributed to an
+        // address that never escrowed anything.
+        f.settlement.settle(
+            &buyer_nullifier,
+            &seller_nullifier,
+            &stranger,
+            &f.seller,
+            &100i128,
+            &100i128,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "seller address does not own the seller deposit")]
+    fn test_settle_rejects_a_seller_address_that_did_not_deposit() {
+        let f = setup();
+        let buyer_nullifier = BytesN::from_array(&f.env, &[1u8; 32]);
+        let seller_nullifier = BytesN::from_array(&f.env, &[2u8; 32]);
+        let stranger = Address::generate(&f.env);
+
+        f.settlement.settle(
+            &buyer_nullifier,
+            &seller_nullifier,
+            &f.buyer,
+            &stranger,
             &100i128,
             &100i128,
         );
