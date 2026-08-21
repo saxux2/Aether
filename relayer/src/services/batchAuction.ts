@@ -16,23 +16,57 @@ export class BatchAuctionService {
   private soroban = new SorobanService();
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  /** True while a runBatchCycle() is in flight — see tick() for why. */
+  private cycleInFlight = false;
 
   start(): void {
     if (this.running) return;
     this.running = true;
     console.log(`[BatchAuction] Starting — interval: ${config.BATCH_INTERVAL_SECONDS}s`);
     this.intervalId = setInterval(
-      () => this.runBatchCycle().catch(err => {
-        console.error('[BatchAuction] Cycle error:', err);
-        recordCycleFailure(err);
-      }),
+      () => this.tick(),
       config.BATCH_INTERVAL_SECONDS * 1_000
     );
   }
 
   stop(): void {
     if (this.intervalId) clearInterval(this.intervalId);
+    this.intervalId = null;
     this.running = false;
+  }
+
+  /**
+   * One interval firing.
+   *
+   * setInterval does not wait for an async callback, and a cycle is in no way
+   * bounded by the interval: every match runs generateMatchProof() (a full
+   * Groth16 prove) plus a broadcast and up to 30s of waitForConfirmation
+   * polling, so a batch with more than a couple of matches comfortably outruns
+   * the default 60s BATCH_INTERVAL_SECONDS. When it did, the next firing
+   * started a *second* cycle alongside the first, and both read their own
+   * getAllActiveOrders() snapshot — which still shows the first cycle's orders
+   * as 'active', because recordMatch() has not run for them yet. The same
+   * resting orders were therefore matched twice: the second settlement panics
+   * on-chain ("deposit not active"), markMatchFailed() rolls its fills back,
+   * and orders whose escrow really did settle get pushed back to 'active' to be
+   * matched again. Skip the firing instead — the next one picks up the work,
+   * and getBatchAuctionStatus() still sees completed cycles, so a genuinely
+   * wedged loop is what /health reports stale, not a merely slow one.
+   */
+  private tick(): void {
+    if (this.cycleInFlight) {
+      console.warn('[BatchAuction] Previous cycle still running — skipping this interval');
+      return;
+    }
+    this.cycleInFlight = true;
+    this.runBatchCycle()
+      .catch(err => {
+        console.error('[BatchAuction] Cycle error:', err);
+        recordCycleFailure(err);
+      })
+      .finally(() => {
+        this.cycleInFlight = false;
+      });
   }
 
   async runBatchCycle(): Promise<void> {
