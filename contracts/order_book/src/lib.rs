@@ -879,6 +879,25 @@ mod tests {
     }
 
     #[test]
+    fn test_order_reaches_the_settled_terminal_state() {
+        // MatchingEngine drives Active -> Matched -> Settled across a single
+        // submit_match. Nothing called mark_settled before, so Settled was
+        // unreachable and settled orders rested at Matched forever.
+        let f = setup();
+        submit_with_amount(&f, tv::AMOUNT_IN);
+        assert!(f.order_book.get_order(&f.commitment).unwrap().status == OrderStatus::Active);
+
+        f.order_book.mark_matched(&f.commitment);
+        assert!(f.order_book.get_order(&f.commitment).unwrap().status == OrderStatus::Matched);
+
+        f.order_book.mark_settled(&f.commitment);
+        assert!(f.order_book.get_order(&f.commitment).unwrap().status == OrderStatus::Settled);
+
+        // Terminal: it left the active index at mark_matched and stays out.
+        assert_eq!(f.order_book.get_active_commitments().len(), 0);
+    }
+
+    #[test]
     fn test_mark_matched_rejects_an_unauthorized_caller() {
         let f = setup();
         submit_with_amount(&f, tv::AMOUNT_IN);

@@ -185,6 +185,19 @@ impl MatchingEngine {
             &usdc_amount,
         );
 
+        // 8. Advance both orders to their terminal state now that the funds
+        //    have actually moved. Nothing used to call OrderBook.mark_settled
+        //    — not this contract, not Settlement, not the relayer — so
+        //    OrderStatus::Settled was unreachable on-chain and every settled
+        //    order rested at Matched forever. That left the ledger unable to
+        //    distinguish "match in flight" from "fully settled and paid out",
+        //    which is the one distinction anyone auditing an order against the
+        //    chain actually needs. settle() either completed or the whole
+        //    invocation reverted, so reaching this line means the escrow is
+        //    released.
+        ob.mark_settled(&buyer_commitment);
+        ob.mark_settled(&seller_commitment);
+
         let count: u64 = env
             .storage()
             .instance()
