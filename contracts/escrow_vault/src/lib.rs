@@ -82,6 +82,23 @@ impl EscrowVault {
             panic!("deposits paused");
         }
 
+        // An escrow of nothing is not an order. A zero amount transfers
+        // successfully, consumes the nullifier, writes an Active DepositRecord,
+        // and — via OrderBook.submit_order — appends a commitment to the
+        // ActiveOrders vector that can never match (MatchProof constrains
+        // 0 < xlm_amount) and never fills. remove_active's own comment spells
+        // out why that vector matters: unbounded growth "would eventually make
+        // every future submit_order call exceed Soroban's per-entry resource
+        // limit and permanently halt new order intake". Minimum order size is
+        // enforced only in the relayer (MIN_ORDER_SIZE_XLM), so on-chain there
+        // was nothing at all stopping a stream of zero-capital orders from
+        // filling that vector at the cost of transaction fees alone.
+        // A negative amount is rejected by the token contract, but panicking
+        // here names the reason instead of surfacing an SAC error.
+        if amount <= 0 {
+            panic!("deposit amount must be positive");
+        }
+
         // Only the two tokens this pool actually trades may be escrowed.
         // Without this, deposit() would pull funds using whatever token
         // contract the caller names — for a legitimate trader that's just
@@ -482,6 +499,40 @@ mod tests {
 
         // Attempt to release more than was deposited — must panic.
         client.release(&nullifier, &counterparty, &150i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "deposit amount must be positive")]
+    fn test_deposit_rejects_zero_amount() {
+        let (env, contract_id) = setup_env();
+        let client = EscrowVaultClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let matching_engine = Address::generate(&env);
+        let settlement = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let sac = env.register_stellar_asset_contract_v2(token_admin);
+        let token_addr = sac.address();
+        let other_token = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &matching_engine,
+            &settlement,
+            &token_addr,
+            &other_token,
+        );
+
+        // A zero escrow is not an order — it would consume a nullifier and
+        // occupy a slot in OrderBook's ActiveOrders vector for free.
+        let trader = Address::generate(&env);
+        client.deposit(
+            &trader,
+            &token_addr,
+            &0i128,
+            &BytesN::from_array(&env, &[99u8; 32]),
+            &BytesN::from_array(&env, &[98u8; 32]),
+            &u64::MAX,
+        );
     }
 
     #[test]
