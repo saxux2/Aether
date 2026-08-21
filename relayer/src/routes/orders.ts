@@ -433,6 +433,27 @@ ordersRouter.get('/:commitment', async (req: Request, res: Response) => {
     const order = await getOrder(req.params.commitment);
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
+    // ── Who may see this order's SIZE ───────────────────────────────────────
+    // A commitment is not a secret: it is an argument of the submit_order
+    // invocation, so every one of them is readable straight off the ledger.
+    // This route is public — the frontend polls it for status without a
+    // credential (see useOrders.ts) — so anyone tailing OrderBook could take
+    // each new commitment, poll here, and read back the exact stroop size of
+    // every resting order in the pool. That is precisely what /orderbook/depth
+    // refuses to publish (it buckets prices and sums quantities) and what the
+    // trader-proof header on the list route above protects.
+    //
+    // Sizes are therefore released only when they are no longer secret or no
+    // longer anyone else's business:
+    //   - to the order's own trader, who can prove it with the same
+    //     X-Trader-Proof signature the list route uses; or
+    //   - once the order has settled, at which point the filled amounts are
+    //     already public in the settlement transaction on-chain.
+    // Status, timestamps, and the settlement figures stay public either way,
+    // which is everything the polling UI actually consumes.
+    const isOwner = verifyTraderProof(order.traderAddress, req.header('X-Trader-Proof'));
+    const showSizes = isOwner || order.status === 'settled';
+
     // Settled match(es) this order participated in — drives the settlement
     // tx link, fill price, and partial-fill (refund) info in the UI.
     const matches = await Match.find({
@@ -460,11 +481,11 @@ ordersRouter.get('/:commitment', async (req: Request, res: Response) => {
       batch_id: order.batchId,
       asset_in: order.assetIn,
       asset_out: order.assetOut,
-      amount_in: order.amountIn,
-      xlm_quantity: order.xlmQuantity ?? '0',
-      filled_quantity: filledXlm.toString(),
-      filled_xlm: (Number(filledXlm) / Number(STROOPS)).toFixed(2),
-      refunded_xlm: (Number(refundedXlm) / Number(STROOPS)).toFixed(2),
+      amount_in: showSizes ? order.amountIn : null,
+      xlm_quantity: showSizes ? order.xlmQuantity ?? '0' : null,
+      filled_quantity: showSizes ? filledXlm.toString() : null,
+      filled_xlm: showSizes ? (Number(filledXlm) / Number(STROOPS)).toFixed(2) : null,
+      refunded_xlm: showSizes ? (Number(refundedXlm) / Number(STROOPS)).toFixed(2) : null,
       is_partial: isPartial,
       submitted_at: order.submittedAt,
       expires_at: order.expiresAt,
@@ -473,7 +494,10 @@ ordersRouter.get('/:commitment', async (req: Request, res: Response) => {
       stellar_tx_hash: order.stellarTxHash,
       settlement_price: latest ? (Number(BigInt(latest.settlementPrice)) / 1_000_000).toFixed(6) : null,
       settlement_tx_hash: latest?.stellarTxHash ?? null,
-      settled_usdc: matches.length ? (Number(settledUsdc) / Number(STROOPS)).toFixed(2) : null,
+      settled_usdc:
+        showSizes && matches.length
+          ? (Number(settledUsdc) / Number(STROOPS)).toFixed(2)
+          : null,
     });
   } catch (err: unknown) {
     console.error('[orders/get]', err instanceof Error ? err.message : String(err));
