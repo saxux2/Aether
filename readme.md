@@ -19,7 +19,12 @@
 </div>
 
 ---
+## Quick Links
 
+| Resource | Link |
+|----------|------|
+| **Live Demo** | [https://zentra-flame.vercel.app](https://aetherstellar.vercel.app/) |
+| **Users Data & Review** |[Users Excel Sheet ](https://excel.cloud.microsoft/open/onedrive/?docId=968510D30B4B732E%21sdcca961e19c44ec1a0f0ee55269d5603&driveId=968510D30B4B732E) |
 ## Table of Contents
 
 - [Overview](#-overview)
