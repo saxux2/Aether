@@ -7,8 +7,13 @@ on:
     branches: ["**"]
 
 # Cancel superseded runs on the same ref.
+# A push to a branch that has an open PR fires both `push` and `pull_request`,
+# and the two used to land in different concurrency groups — so every commit
+# ran the whole matrix twice (33429004543 and 33429008089 are the same commit).
+# Keying on the PR number when there is one puts both events in one group, so
+# the duplicate cancels instead of burning a second full run.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 # Least-privilege default — no job here needs to write to the repo or its
@@ -34,7 +39,7 @@ jobs:
       checks: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -78,7 +83,7 @@ jobs:
           working-directory: contracts
 
       - name: Upload WASM artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: contract-wasms
           path: contracts/target/wasm32v1-none/release/*.wasm
@@ -102,10 +107,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: "npm"
@@ -125,7 +130,7 @@ jobs:
         run: bash scripts/compile_circuits.sh
 
       - name: Cache Powers of Tau file
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: circuits/build/pot12_final.ptau
           key: pot12-final-ptau-v1
@@ -153,10 +158,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: "npm"
@@ -199,7 +204,7 @@ jobs:
         run: npm run build
 
       - name: Upload Next.js build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextjs-build
           path: frontend/.next
@@ -213,10 +218,10 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: "npm"

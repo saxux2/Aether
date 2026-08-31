@@ -14,7 +14,21 @@ name: CD
 on:
   push:
     branches: [main]
+    # A README edit is not a reason to redeploy production. Docs-only pushes
+    # to main were triggering the whole deploy chain.
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch: {}
+
+# Deploys must not overlap: two pushes landing close together could otherwise
+# have their Render and Vercel steps interleave and leave the live services on
+# different builds. Unlike CI, a deploy already in flight is never cancelled —
+# killing it halfway is how you get a half-updated production.
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
 
 # Least-privilege default — these jobs only call external APIs (Stellar RPC,
 # Render, Vercel) via secrets, none need to write to the repo itself.
@@ -45,7 +59,7 @@ jobs:
       matching_engine: ${{ steps.addresses.outputs.matching_engine }}
       deployed: ${{ steps.addresses.outputs.deployed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain (+ wasm32v1-none target)
         uses: dtolnay/rust-toolchain@stable
@@ -77,8 +91,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
 
+      # Pinned to a release rather than @main: that ref is whatever the action's
+      # default branch happens to hold when this runs, and this job has the
+      # mainnet deployer key in scope.
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+        uses: cargo-bins/cargo-binstall@v1.22.0
 
       # Pulls the prebuilt stellar binary — no native compilation needed.
       - name: Install Stellar CLI
@@ -188,7 +205,7 @@ jobs:
     # public network) — update them here if the mainnet contracts are ever
     # redeployed; nothing wires them automatically the way testnet's are.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Deploy to Vercel (production)
         env:

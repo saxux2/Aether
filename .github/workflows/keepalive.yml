@@ -17,10 +17,18 @@ on:
 permissions:
   issues: write
 
+# Scheduled runs can pile up if GitHub is lagging; a second ping while the
+# first is still waiting on a cold start would double-file against the same
+# incident. One at a time, and let the in-flight one finish.
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
 jobs:
   ping:
     name: Ping relayer health endpoint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       RELAYER_URL: ${{ vars.RELAYER_URL || 'https://aether-w5p8.onrender.com' }}
