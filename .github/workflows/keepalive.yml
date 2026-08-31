@@ -92,6 +92,13 @@ jobs:
           SUMMARY: ${{ steps.health.outputs.summary }}
         run: |
           set -uo pipefail
+          # The label has to exist before an issue can carry it, and it never
+          # did: `gh issue create --label` failed with "could not add label:
+          # 'relayer-degraded' not found", which the earlier output crash had
+          # been masking. Create it idempotently so a fresh clone of this repo
+          # can alert without anyone setting a label up by hand first.
+          gh label create "$INCIDENT_LABEL" --repo "$GITHUB_REPOSITORY" --color B60205 --description "Relayer health check is failing" 2>/dev/null || true
+
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$INCIDENT_LABEL" --state open --json number --jq '.[0].number // empty')
           ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           if [ -n "$existing" ]; then
