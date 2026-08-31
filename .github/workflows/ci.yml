@@ -8,12 +8,14 @@ on:
 
 # Cancel superseded runs on the same ref.
 # A push to a branch that has an open PR fires both `push` and `pull_request`,
-# and the two used to land in different concurrency groups — so every commit
-# ran the whole matrix twice (33429004543 and 33429008089 are the same commit).
-# Keying on the PR number when there is one puts both events in one group, so
-# the duplicate cancels instead of burning a second full run.
+# so every commit ran the whole matrix twice (33429004543 and 33429008089 are
+# the same commit). Both events have to resolve to the *same* group string for
+# the duplicate to cancel: head_ref is set only on pull_request and is the bare
+# branch name, ref_name is the bare branch name on push. Keying on the PR
+# number does not work — push has no pull_request object and falls back to
+# refs/heads/x, which is a different group.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 # Least-privilege default — no job here needs to write to the repo or its
