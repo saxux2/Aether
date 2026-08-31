@@ -8,13 +8,17 @@
 <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?style=for-the-badge" />
 <img src="https://img.shields.io/badge/Status-Live%20on%20Mainnet-brightgreen?style=for-the-badge" />
 
+[![CI](https://github.com/saxux2/Aether/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/saxux2/Aether/actions/workflows/ci.yml)
+[![CD](https://github.com/saxux2/Aether/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/saxux2/Aether/actions/workflows/deploy.yml)
+[![Relayer keepalive](https://github.com/saxux2/Aether/actions/workflows/keepalive.yml/badge.svg?branch=main)](https://github.com/saxux2/Aether/actions/workflows/keepalive.yml)
+
 # Aether
 
 ### Zero-Knowledge Institutional Dark Pool DEX on Stellar Soroban
 
 **Large-block XLM ↔ USDC trading where every order is sealed with a Groth16 ZK proof and matched in 60-second batch auctions — front-running is mathematically impossible.**
 
-[Live App](https://aetherstellar.vercel.app) · [Relayer API](https://aether-zpkh.onrender.com/api/health) · [Explorer](https://stellar.expert/explorer/public) · [Contracts](#-deployed-contracts) · [Architecture](#-architecture) · [Quick Start](#-quick-start)
+[Live App](https://aetherstellar.vercel.app) · [Relayer API](https://aether-w5p8.onrender.com/api/health) · [Explorer](https://stellar.expert/explorer/public) · [Contracts](#-deployed-contracts) · [Architecture](#-architecture) · [Quick Start](#-quick-start)
 
 </div>
 
@@ -155,7 +159,7 @@ The chain stores only this hash. Price and quantity are proven to be well-formed
               ▼                                  ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              RELAYER (Node.js + Express + MongoDB)               │
-│                  https://aether-zpkh.onrender.com               │
+│                  https://aether-w5p8.onrender.com               │
 │                                                                  │
 │  REST API ─── BatchAuctionService (60s cycle)                   │
 │                   │                                              │
@@ -382,6 +386,23 @@ pub fn get_total_volume_usdc(env) -> i128
 | **MatchingEngine** | `CAOTNMFUXGRGA6QACDFVPJ4TFDDFNASWEMBCHPSVBJ3ZQSRWW5XF52H2` | [view](https://stellar.expert/explorer/public/contract/CAOTNMFUXGRGA6QACDFVPJ4TFDDFNASWEMBCHPSVBJ3ZQSRWW5XF52H2) |
 | **Settlement** | `CAPWWZPALWF4TRUV6ZBHYDFO5BJFVVJDE36WRU4AHKEJ5INB3FUHKB56` | [view](https://stellar.expert/explorer/public/contract/CAPWWZPALWF4TRUV6ZBHYDFO5BJFVVJDE36WRU4AHKEJ5INB3FUHKB56) |
 
+> **What is actually deployed:** these addresses were deployed from commit
+> [`52906d3`](https://github.com/saxux2/Aether/commit/52906d3) on 10 July 2026. Four contract
+> fixes have landed in `contracts/` since then and are **not yet on mainnet**, so the live
+> code predates them:
+>
+> | Commit | Contract | Fix |
+> |---|---|---|
+> | [`f537480`](https://github.com/saxux2/Aether/commit/f537480) | order_book | gate `mark_matched` / `mark_settled` on the MatchingEngine |
+> | [`0c09617`](https://github.com/saxux2/Aether/commit/0c09617) | matching_engine | mark orders settled once the funds have moved |
+> | [`571e028`](https://github.com/saxux2/Aether/commit/571e028) | settlement | bind payout addresses to the deposits they are paid from |
+> | [`d742d84`](https://github.com/saxux2/Aether/commit/d742d84) | escrow_vault | reject a deposit of nothing |
+>
+> Redeploying needs a funded mainnet deployer key: run `contracts/scripts/deploy-mainnet.sh`,
+> then update the addresses here, in `.github/workflows/deploy.yml`, and in the frontend env.
+> The deployed WASM hashes are listed under [Verifying what is on-chain](#verifying-what-is-on-chain)
+> so anyone can check a rebuild against them.
+
 ### Supporting Addresses
 
 | | Address |
@@ -394,14 +415,38 @@ pub fn get_total_volume_usdc(env) -> i128
 
 > **USDC pairing:** the mainnet USDC SAC is configured via `NEXT_PUBLIC_USDC_TOKEN_ADDRESS` (frontend) and `USDC_TOKEN_ADDRESS` (relayer). Set these to the Circle mainnet USDC contract before enabling USDC-side trading.
 
+### Verifying what is on-chain
+
+The WASM hash each mainnet address is running, read from `https://mainnet.sorobanrpc.com`
+on 31 August 2026:
+
+| Contract | Deployed WASM hash (sha256) |
+|---|---|
+| **ZKVerifier** | `259741183fdf24e8278c2e7ba735cb0a8388d82f1e25f4fca56b1ccaa9c52115` |
+| **EscrowVault** | `8e78074c5db33a5d5392f3db4e5ae349060039fb14aaec349ea88ee8d9031eef` |
+| **OrderBook** | `d78217a57c79d482d9035ef2d6204942e016a632774f487146e680842373f724` |
+| **MatchingEngine** | `7e149fb9d5840941688e6c8131dd9e9c06839a9ac703086df72e2eedf6611f3c` |
+| **Settlement** | `1fcdb65d2c5ad28c12f3fc686251d053fa566b278f180d646cb290687c87a6a4` |
+
+Fetch and hash any of them yourself:
+
+```bash
+stellar contract fetch --id <CONTRACT_ADDRESS> --network public --out-file onchain.wasm
+sha256sum onchain.wasm
+```
+
+A rebuild from this repo will only match once the four fixes listed above are redeployed,
+and only when built with the same toolchain — Soroban WASM builds are not byte-reproducible
+across differing rustc versions.
+
 ### Live Services
 
 | Surface | URL |
 |---|---|
 | **Frontend (Vercel)** | https://aetherstellar.vercel.app |
-| **Relayer API (Render)** | https://aether-zpkh.onrender.com |
-| **Relayer health** | https://aether-zpkh.onrender.com/api/health |
-| **Relayer status** | https://aether-zpkh.onrender.com/api/status |
+| **Relayer API (Render)** | https://aether-w5p8.onrender.com |
+| **Relayer health** | https://aether-w5p8.onrender.com/api/health |
+| **Relayer status** | https://aether-w5p8.onrender.com/api/status |
 
 ---
 
@@ -411,7 +456,7 @@ Everything Aether claims is enforced by the deployed contracts — you can check
 
 **Query live relayer state:**
 ```bash
-curl https://aether-zpkh.onrender.com/api/status
+curl https://aether-w5p8.onrender.com/api/status
 # → { "running": true, "network": "mainnet",
 #     "order_book_address": "CAXR5KWD...", "current_batch_id": <n>, ... }
 ```
@@ -441,7 +486,7 @@ Browse all contract activity on [Stellar Expert (public network)](https://stella
 
 **Stack:** Node.js 20 · TypeScript · Express · Mongoose (MongoDB Atlas)
 
-Base URL: `https://aether-zpkh.onrender.com`
+Base URL: `https://aether-w5p8.onrender.com`
 
 | Method | Path | Description |
 |---|---|---|
@@ -594,7 +639,7 @@ SETTLEMENT_ADDRESS=CAPWWZPALWF4TRUV6ZBHYDFO5BJFVVJDE36WRU4AHKEJ5INB3FUHKB56
 ### `frontend/.env.production.local`
 
 ```env
-NEXT_PUBLIC_RELAYER_URL=https://aether-zpkh.onrender.com
+NEXT_PUBLIC_RELAYER_URL=https://aether-w5p8.onrender.com
 NEXT_PUBLIC_STELLAR_NETWORK=mainnet
 NEXT_PUBLIC_STELLAR_RPC_URL=https://mainnet.sorobanrpc.com
 NEXT_PUBLIC_STELLAR_HORIZON_URL=https://horizon.stellar.org
@@ -771,6 +816,6 @@ MIT © 2026 Aether
 
 Built on Stellar Soroban · Proven by BN254 Groth16
 
-[Live App](https://aetherstellar.vercel.app) · [Relayer API](https://aether-zpkh.onrender.com/api/health) · [GitHub](https://github.com/saxux2/Aether)
+[Live App](https://aetherstellar.vercel.app) · [Relayer API](https://aether-w5p8.onrender.com/api/health) · [GitHub](https://github.com/saxux2/Aether)
 
 </div>

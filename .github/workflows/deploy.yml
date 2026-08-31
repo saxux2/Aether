@@ -14,7 +14,21 @@ name: CD
 on:
   push:
     branches: [main]
+    # A README edit is not a reason to redeploy production. Docs-only pushes
+    # to main were triggering the whole deploy chain.
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch: {}
+
+# Deploys must not overlap: two pushes landing close together could otherwise
+# have their Render and Vercel steps interleave and leave the live services on
+# different builds. Unlike CI, a deploy already in flight is never cancelled —
+# killing it halfway is how you get a half-updated production.
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
 
 # Least-privilege default — these jobs only call external APIs (Stellar RPC,
 # Render, Vercel) via secrets, none need to write to the repo itself.
@@ -29,6 +43,7 @@ jobs:
   deploy-contract:
     name: Deploy contract (Stellar testnet)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # References the repo's existing "Production" GitHub Environment (created
     # 2026-06-30, currently has zero protection rules configured). This gives
     # the repo owner a place to add required reviewers/wait timers (Settings
@@ -44,7 +59,7 @@ jobs:
       matching_engine: ${{ steps.addresses.outputs.matching_engine }}
       deployed: ${{ steps.addresses.outputs.deployed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain (+ wasm32v1-none target)
         uses: dtolnay/rust-toolchain@stable
@@ -58,11 +73,29 @@ jobs:
 
       # Fallback system libs in case binstall has to compile from source
       # (stellar-cli's hardware-wallet/keyring crates link dbus-1 and libudev).
+      #
+      # The hosted runner image ships third-party apt sources pointing at
+      # packages.microsoft.com (azure-cli + prod). Those started answering 403
+      # to the runner IP range, and since apt treats an unreachable signed repo
+      # as fatal, `apt-get update` exited 100 and killed the entire deploy —
+      # over repositories nothing in this job installs from. Drop those lists
+      # and refresh only the Ubuntu archives. Both the legacy .list and the
+      # deb822 .sources spellings are removed; images have used both.
       - name: Install Stellar CLI build deps
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.sources
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.sources
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
 
+      # Pinned to a release rather than @main: that ref is whatever the action's
+      # default branch happens to hold when this runs, and this job has the
+      # mainnet deployer key in scope.
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+        uses: cargo-bins/cargo-binstall@v1.22.0
 
       # Pulls the prebuilt stellar binary — no native compilation needed.
       - name: Install Stellar CLI
@@ -109,6 +142,7 @@ jobs:
   deploy-relayer:
     name: Deploy relayer (Render)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: Production
     needs: [deploy-contract]
     # No dependency on deploy-contract actually deploying — contract deploy
@@ -161,6 +195,7 @@ jobs:
   deploy-frontend:
     name: Deploy frontend (Vercel, mainnet)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: Production
     needs: [deploy-relayer]
     # No dependency on deploy-contract's outputs: that job deploys contracts
@@ -170,7 +205,7 @@ jobs:
     # public network) — update them here if the mainnet contracts are ever
     # redeployed; nothing wires them automatically the way testnet's are.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Deploy to Vercel (production)
         env:

@@ -42,10 +42,16 @@ export class SorobanService {
 
   /** Broadcast a pre-signed XDR transaction and return the tx hash. */
   async broadcastTransaction(signedXdr: string): Promise<string> {
-    // Pass the XDR string directly; sendTransaction only calls .toXDR() internally,
-    // so we skip fromXDR() which fails on Soroban footprint union types.
+    // Pass the XDR string directly; sendTransaction only serializes the
+    // transaction internally, so we skip fromXDR() which fails on Soroban
+    // footprint union types. SDK 13 called .toXDR() and SDK 17 calls .toXdr();
+    // answer to both so the shim does not silently break on the next bump —
+    // a missing method surfaces only as "Order submission failed" at runtime.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await this.server.sendTransaction({ toXDR: () => signedXdr } as any);
+    const result = await this.server.sendTransaction({
+      toXDR: () => signedXdr,
+      toXdr: () => signedXdr,
+    } as any);
     assertAccepted(result.status, result.hash, result.errorResult);
     return result.hash;
   }

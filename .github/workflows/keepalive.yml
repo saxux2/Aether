@@ -17,10 +17,18 @@ on:
 permissions:
   issues: write
 
+# Scheduled runs can pile up if GitHub is lagging; a second ping while the
+# first is still waiting on a cold start would double-file against the same
+# incident. One at a time, and let the in-flight one finish.
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
 jobs:
   ping:
     name: Ping relayer health endpoint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       RELAYER_URL: ${{ vars.RELAYER_URL || 'https://aether-w5p8.onrender.com' }}
@@ -40,14 +48,36 @@ jobs:
           cat /tmp/health.json 2>/dev/null || echo '{}' > /tmp/health.json
           echo
 
+          # A `key=value` line in $GITHUB_OUTPUT must be single-line. The body
+          # here is whatever the endpoint returned, and an unhealthy relayer is
+          # exactly when that stops being the compact JSON this assumed — a
+          # suspended Render service answers 503 with an HTML error page, whose
+          # second line ("<head>") the runner read as a new key and rejected:
+          # "Invalid format '<head>'". That killed the step, so the incident
+          # issue below never got filed on precisely the runs it exists for.
+          # Squash the body to one line, cap it, and still use the multiline
+          # heredoc form so an unexpected shape can never break the step again.
+          emit() {
+            {
+              echo "$1<<__HEALTH_EOF__"
+              echo "$2"
+              echo "__HEALTH_EOF__"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          # Translate every whitespace class (newlines, CRs, tabs) to a
+          # single space and keep the first 300 chars — enough to identify
+          # the failure in the issue body without pasting a whole error
+          # page into it.
+          one_line=$(tr -s '[:space:]' ' ' < /tmp/health.json | cut -c1-300)
+
           if [ "$curl_exit" -ne 0 ]; then
             echo "degraded=true" >> "$GITHUB_OUTPUT"
-            echo "summary=Relayer did not respond (connection error, curl exit $curl_exit)" >> "$GITHUB_OUTPUT"
+            emit summary "Relayer did not respond (connection error, curl exit $curl_exit)"
           elif [ "$code" -ge 500 ]; then
             echo "::warning::relayer awake but health is degraded (HTTP $code)"
             echo "degraded=true" >> "$GITHUB_OUTPUT"
-            body=$(cat /tmp/health.json)
-            echo "summary=Relayer health check returned HTTP $code: $body" >> "$GITHUB_OUTPUT"
+            emit summary "Relayer health check returned HTTP $code: $one_line"
           else
             echo "degraded=false" >> "$GITHUB_OUTPUT"
           fi
@@ -57,21 +87,55 @@ jobs:
       # issue promptly — see INCIDENT_RESPONSE.md's triage steps before
       # assuming the worst; Render free-tier cold starts can occasionally
       # still exceed the retry budget above under heavy load.
+      #
+      # The health body reaches this step through the SUMMARY env var rather
+      # than a ${{ }} expression pasted into the script. That body is remote,
+      # attacker-influenceable text; a GitHub expression is substituted into
+      # the shell source before bash parses it, so a crafted health response
+      # could close the quote and run commands. As an env var it is only ever
+      # data.
       - name: File or update incident issue
         if: steps.health.outputs.degraded == 'true'
+        env:
+          SUMMARY: ${{ steps.health.outputs.summary }}
         run: |
           set -uo pipefail
+          # The label has to exist before an issue can carry it, and it never
+          # did: `gh issue create --label` failed with "could not add label:
+          # 'relayer-degraded' not found", which the earlier output crash had
+          # been masking. Create it idempotently so a fresh clone of this repo
+          # can alert without anyone setting a label up by hand first.
+          gh label create "$INCIDENT_LABEL" --repo "$GITHUB_REPOSITORY" --color B60205 --description "Relayer health check is failing" 2>/dev/null || true
+
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$INCIDENT_LABEL" --state open --json number --jq '.[0].number // empty')
           ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
-              --body "Still degraded at $ts: ${{ steps.health.outputs.summary }}"
+            # This job runs every ~10 min. A relayer that stays down for a day
+            # would otherwise pile ~144 comments onto one issue and bury the
+            # triage notes under its own noise, so re-state the status at most
+            # hourly. The issue's own updatedAt is the clock, so a human
+            # replying resets it too and the bot stays out of the way.
+            last=$(gh issue view "$existing" --repo "$GITHUB_REPOSITORY" --json updatedAt --jq '.updatedAt')
+            age=$(( $(date -u +%s) - $(date -u -d "$last" +%s) ))
+            if [ "$age" -lt 3600 ]; then
+              echo "==> Incident #$existing was updated ${age}s ago; still degraded, staying quiet until the hour is up."
+            else
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $ts: $SUMMARY"
+            fi
           else
-            body=$(printf 'Detected by the keepalive workflow (runs every ~10 min).\n\n**Status:** %s\n\nSee INCIDENT_RESPONSE.md -> "Relayer down or degraded" for triage steps.\nThis issue will get a new comment on each subsequent failed check, and should be\nclosed manually once resolved (auto-close-on-recovery is deliberately not\nimplemented -- closing is a human confirming the fix, not just one good check).' "${{ steps.health.outputs.summary }}")
-            gh issue create --repo "$GITHUB_REPOSITORY" \
-              --title "Relayer degraded/unreachable ($ts)" \
-              --label "$INCIDENT_LABEL" \
-              --body "$body"
+            {
+              echo "Detected by the keepalive workflow (runs every ~10 min)."
+              echo
+              echo "**Status:** $SUMMARY"
+              echo
+              echo "See INCIDENT_RESPONSE.md -> 'Relayer down or degraded' for triage steps."
+              echo
+              echo "While this issue stays open the workflow re-states the status at most once"
+              echo "an hour. Close it manually once resolved — auto-close-on-recovery is"
+              echo "deliberately not implemented, since closing is a human confirming the fix"
+              echo "and not just one good health check."
+            } > "$RUNNER_TEMP/incident.md"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Relayer degraded/unreachable ($ts)" --label "$INCIDENT_LABEL" --body-file "$RUNNER_TEMP/incident.md"
           fi
 
       # Auto-remediating signal: if a tracking issue is open and the relayer
@@ -84,6 +148,14 @@ jobs:
           set -uo pipefail
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$INCIDENT_LABEL" --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
-              --body "Health check passed again at $(date -u +%Y-%m-%dT%H:%M:%SZ). Leaving open for a human to confirm the underlying cause is resolved before closing."
+            # Same hourly throttle as the degraded path: an issue left open
+            # after recovery should not collect a "passed again" comment every
+            # ten minutes until someone gets round to closing it.
+            last=$(gh issue view "$existing" --repo "$GITHUB_REPOSITORY" --json updatedAt --jq '.updatedAt')
+            age=$(( $(date -u +%s) - $(date -u -d "$last" +%s) ))
+            if [ "$age" -lt 3600 ]; then
+              echo "==> Incident #$existing was updated ${age}s ago; healthy now, staying quiet until the hour is up."
+            else
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Health check passed again at $(date -u +%Y-%m-%dT%H:%M:%SZ). Leaving open for a human to confirm the underlying cause is resolved before closing."
+            fi
           fi
