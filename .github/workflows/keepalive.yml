@@ -79,21 +79,48 @@ jobs:
       # issue promptly — see INCIDENT_RESPONSE.md's triage steps before
       # assuming the worst; Render free-tier cold starts can occasionally
       # still exceed the retry budget above under heavy load.
+      #
+      # The health body reaches this step through the SUMMARY env var rather
+      # than a ${{ }} expression pasted into the script. That body is remote,
+      # attacker-influenceable text; a GitHub expression is substituted into
+      # the shell source before bash parses it, so a crafted health response
+      # could close the quote and run commands. As an env var it is only ever
+      # data.
       - name: File or update incident issue
         if: steps.health.outputs.degraded == 'true'
+        env:
+          SUMMARY: ${{ steps.health.outputs.summary }}
         run: |
           set -uo pipefail
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$INCIDENT_LABEL" --state open --json number --jq '.[0].number // empty')
           ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
-              --body "Still degraded at $ts: ${{ steps.health.outputs.summary }}"
+            # This job runs every ~10 min. A relayer that stays down for a day
+            # would otherwise pile ~144 comments onto one issue and bury the
+            # triage notes under its own noise, so re-state the status at most
+            # hourly. The issue's own updatedAt is the clock, so a human
+            # replying resets it too and the bot stays out of the way.
+            last=$(gh issue view "$existing" --repo "$GITHUB_REPOSITORY" --json updatedAt --jq '.updatedAt')
+            age=$(( $(date -u +%s) - $(date -u -d "$last" +%s) ))
+            if [ "$age" -lt 3600 ]; then
+              echo "==> Incident #$existing was updated ${age}s ago; still degraded, staying quiet until the hour is up."
+            else
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $ts: $SUMMARY"
+            fi
           else
-            body=$(printf 'Detected by the keepalive workflow (runs every ~10 min).\n\n**Status:** %s\n\nSee INCIDENT_RESPONSE.md -> "Relayer down or degraded" for triage steps.\nThis issue will get a new comment on each subsequent failed check, and should be\nclosed manually once resolved (auto-close-on-recovery is deliberately not\nimplemented -- closing is a human confirming the fix, not just one good check).' "${{ steps.health.outputs.summary }}")
-            gh issue create --repo "$GITHUB_REPOSITORY" \
-              --title "Relayer degraded/unreachable ($ts)" \
-              --label "$INCIDENT_LABEL" \
-              --body "$body"
+            {
+              echo "Detected by the keepalive workflow (runs every ~10 min)."
+              echo
+              echo "**Status:** $SUMMARY"
+              echo
+              echo "See INCIDENT_RESPONSE.md -> 'Relayer down or degraded' for triage steps."
+              echo
+              echo "While this issue stays open the workflow re-states the status at most once"
+              echo "an hour. Close it manually once resolved — auto-close-on-recovery is"
+              echo "deliberately not implemented, since closing is a human confirming the fix"
+              echo "and not just one good health check."
+            } > "$RUNNER_TEMP/incident.md"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Relayer degraded/unreachable ($ts)" --label "$INCIDENT_LABEL" --body-file "$RUNNER_TEMP/incident.md"
           fi
 
       # Auto-remediating signal: if a tracking issue is open and the relayer
@@ -106,6 +133,14 @@ jobs:
           set -uo pipefail
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$INCIDENT_LABEL" --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
-              --body "Health check passed again at $(date -u +%Y-%m-%dT%H:%M:%SZ). Leaving open for a human to confirm the underlying cause is resolved before closing."
+            # Same hourly throttle as the degraded path: an issue left open
+            # after recovery should not collect a "passed again" comment every
+            # ten minutes until someone gets round to closing it.
+            last=$(gh issue view "$existing" --repo "$GITHUB_REPOSITORY" --json updatedAt --jq '.updatedAt')
+            age=$(( $(date -u +%s) - $(date -u -d "$last" +%s) ))
+            if [ "$age" -lt 3600 ]; then
+              echo "==> Incident #$existing was updated ${age}s ago; healthy now, staying quiet until the hour is up."
+            else
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Health check passed again at $(date -u +%Y-%m-%dT%H:%M:%SZ). Leaving open for a human to confirm the underlying cause is resolved before closing."
+            fi
           fi
