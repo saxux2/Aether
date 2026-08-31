@@ -352,7 +352,33 @@ async function main() {
   // ──────────────────────────────────────────────
   console.log(`\n${'─'.repeat(40)}`);
   console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) process.exit(1);
+  return failed;
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+// snarkjs's proving path spins up a pool of bn128 worker threads and caches
+// the curve on globalThis; nothing tears it down when the last proof is done,
+// so the event loop never drains and node just sits there after the summary
+// prints. Locally that's a stray process you Ctrl-C; in CI the circuits job
+// hung on a fully *green* run until the 6h job limit killed it. Terminate the
+// pool, then exit on the result rather than waiting for a natural exit that
+// cannot come.
+async function shutdown() {
+  if (globalThis.curve_bn128) {
+    try {
+      await globalThis.curve_bn128.terminate();
+    } catch {
+      // Best effort — the explicit exit below is the real guarantee.
+    }
+  }
+}
+
+main()
+  .then(async failed => {
+    await shutdown();
+    process.exit(failed > 0 ? 1 : 0);
+  })
+  .catch(async err => {
+    console.error(err);
+    await shutdown();
+    process.exit(1);
+  });

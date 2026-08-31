@@ -1,4 +1,4 @@
-import { xdr, Address } from '@stellar/stellar-sdk';
+import { xdr, Address, scValToNative } from '@stellar/stellar-sdk';
 
 export interface DecodedInvocation {
   contractId: string;
@@ -25,33 +25,41 @@ export interface DecodedInvocation {
  * were a real order or a real cancellation of someone else's order.
  */
 export function decodeInvocation(signedXdr: string): DecodedInvocation {
-  const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
+  // js-xdr 5 (@stellar/stellar-sdk 17) decodes a union to a plain object
+  // `{ type: '<armName>', <armName>: <value> }` and a struct to a plain object
+  // of its fields — the old `envelope.switch().name` / `envelope.v1()` accessor
+  // calls throw "is not a function" against it. Read the discriminant off
+  // `.type` and the payload off the arm property instead.
+  const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64') as any;
 
   const tx =
-    envelope.switch().name === 'envelopeTypeTxFeeBump'
-      ? envelope.feeBump().tx().innerTx().v1().tx()
-      : envelope.v1().tx();
+    envelope.type === 'envelopeTypeTxFeeBump'
+      ? envelope.feeBump.tx.innerTx.v1.tx
+      : envelope.v1?.tx;
+  if (!tx) {
+    throw new Error(`unsupported transaction envelope type: ${envelope.type}`);
+  }
 
-  const ops = tx.operations();
+  const ops = tx.operations;
   if (ops.length !== 1) {
     throw new Error(`expected exactly 1 operation, got ${ops.length}`);
   }
 
-  const body = ops[0].body();
-  if (body.switch().name !== 'invokeHostFunction') {
-    throw new Error(`expected invokeHostFunction operation, got ${body.switch().name}`);
+  const body = ops[0].body;
+  if (body.type !== 'invokeHostFunction') {
+    throw new Error(`expected invokeHostFunction operation, got ${body.type}`);
   }
 
-  const hostFunction = body.invokeHostFunctionOp().hostFunction();
-  if (hostFunction.switch().name !== 'hostFunctionTypeInvokeContract') {
-    throw new Error(`expected contract invocation, got ${hostFunction.switch().name}`);
+  const hostFunction = body.invokeHostFunctionOp.hostFunction;
+  if (hostFunction.type !== 'hostFunctionTypeInvokeContract') {
+    throw new Error(`expected contract invocation, got ${hostFunction.type}`);
   }
 
-  const invoke = hostFunction.invokeContract();
+  const invoke = hostFunction.invokeContract;
   return {
-    contractId: Address.fromScAddress(invoke.contractAddress()).toString(),
-    functionName: invoke.functionName().toString(),
-    args: invoke.args(),
+    contractId: Address.fromScAddress(invoke.contractAddress).toString(),
+    functionName: invoke.functionName.toString(),
+    args: invoke.args,
   };
 }
 
@@ -62,19 +70,19 @@ export function scValToAddress(v: xdr.ScVal): string {
 
 /** Decode a BytesN<32>-typed ScVal argument to a hex string. */
 export function scValToBytesHex(v: xdr.ScVal): string {
-  return v.bytes().toString('hex');
+  return Buffer.from(scValToNative(v) as Uint8Array).toString('hex');
 }
 
 /**
- * Decode an i128-typed ScVal argument to a bigint. Every i128 this codebase
- * builds (see soroban.ts / relayer soroban.ts) is a non-negative escrow/fill
- * amount encoded with hi=0, so plain (hi << 64) + lo is exact for our range.
+ * Decode an i128-typed ScVal argument to a bigint.
+ *
+ * scValToNative already reassembles the hi/lo halves as a signed 128-bit
+ * bigint, so it is exact for the full i128 range — not just the non-negative
+ * escrow/fill amounts this codebase actually builds. It is also the one ScVal
+ * accessor whose shape is stable across js-xdr versions, unlike `v.i128()`.
  */
 export function scValToBigInt(v: xdr.ScVal): bigint {
-  const parts = v.i128();
-  const hi = BigInt(parts.hi().toString());
-  const lo = BigInt(parts.lo().toString());
-  return (hi << 64n) + lo;
+  return scValToNative(v) as bigint;
 }
 
 /** Compare a decimal or 0x-prefixed hex field-element string to hex bytes from an ScVal. */
@@ -89,5 +97,5 @@ export function fieldElementMatchesBytesHex(fieldElement: string, hexBytes: stri
  * whatever the JSON body claims.
  */
 export function scValToU64(v: xdr.ScVal): bigint {
-  return BigInt(v.u64().toString());
+  return scValToNative(v) as bigint;
 }

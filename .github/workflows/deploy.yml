@@ -29,6 +29,7 @@ jobs:
   deploy-contract:
     name: Deploy contract (Stellar testnet)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # References the repo's existing "Production" GitHub Environment (created
     # 2026-06-30, currently has zero protection rules configured). This gives
     # the repo owner a place to add required reviewers/wait timers (Settings
@@ -58,8 +59,23 @@ jobs:
 
       # Fallback system libs in case binstall has to compile from source
       # (stellar-cli's hardware-wallet/keyring crates link dbus-1 and libudev).
+      #
+      # The hosted runner image ships third-party apt sources pointing at
+      # packages.microsoft.com (azure-cli + prod). Those started answering 403
+      # to the runner IP range, and since apt treats an unreachable signed repo
+      # as fatal, `apt-get update` exited 100 and killed the entire deploy —
+      # over repositories nothing in this job installs from. Drop those lists
+      # and refresh only the Ubuntu archives. Both the legacy .list and the
+      # deb822 .sources spellings are removed; images have used both.
       - name: Install Stellar CLI build deps
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.sources
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.sources
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
 
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
@@ -109,6 +125,7 @@ jobs:
   deploy-relayer:
     name: Deploy relayer (Render)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: Production
     needs: [deploy-contract]
     # No dependency on deploy-contract actually deploying — contract deploy
@@ -161,6 +178,7 @@ jobs:
   deploy-frontend:
     name: Deploy frontend (Vercel, mainnet)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: Production
     needs: [deploy-relayer]
     # No dependency on deploy-contract's outputs: that job deploys contracts

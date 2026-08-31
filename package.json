@@ -10,7 +10,12 @@
   ],
   "overrides": {
     "glob": "^13.0.6",
-    "test-exclude": "^8.0.0"
+    "test-exclude": "^8.0.0",
+    "ws": "^8.21.3",
+    "underscore": "^1.13.8",
+    "brace-expansion@1": "^1.1.18",
+    "sharp": "^0.35.4",
+    "postcss": "^8.5.26"
   },
   "scripts": {
     "build:circuits": "cd circuits && npm run build",
@@ -26,6 +31,7 @@
     "test:e2e": "node scripts/e2e_test.js"
   },
   "dependencies": {
+    "@stellar/stellar-sdk": "^17.0.1",
     "snarkjs": "^0.7.6"
   }
 }

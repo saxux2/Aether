@@ -40,14 +40,36 @@ jobs:
           cat /tmp/health.json 2>/dev/null || echo '{}' > /tmp/health.json
           echo
 
+          # A `key=value` line in $GITHUB_OUTPUT must be single-line. The body
+          # here is whatever the endpoint returned, and an unhealthy relayer is
+          # exactly when that stops being the compact JSON this assumed — a
+          # suspended Render service answers 503 with an HTML error page, whose
+          # second line ("<head>") the runner read as a new key and rejected:
+          # "Invalid format '<head>'". That killed the step, so the incident
+          # issue below never got filed on precisely the runs it exists for.
+          # Squash the body to one line, cap it, and still use the multiline
+          # heredoc form so an unexpected shape can never break the step again.
+          emit() {
+            {
+              echo "$1<<__HEALTH_EOF__"
+              echo "$2"
+              echo "__HEALTH_EOF__"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          # Translate every whitespace class (newlines, CRs, tabs) to a
+          # single space and keep the first 300 chars — enough to identify
+          # the failure in the issue body without pasting a whole error
+          # page into it.
+          one_line=$(tr -s '[:space:]' ' ' < /tmp/health.json | cut -c1-300)
+
           if [ "$curl_exit" -ne 0 ]; then
             echo "degraded=true" >> "$GITHUB_OUTPUT"
-            echo "summary=Relayer did not respond (connection error, curl exit $curl_exit)" >> "$GITHUB_OUTPUT"
+            emit summary "Relayer did not respond (connection error, curl exit $curl_exit)"
           elif [ "$code" -ge 500 ]; then
             echo "::warning::relayer awake but health is degraded (HTTP $code)"
             echo "degraded=true" >> "$GITHUB_OUTPUT"
-            body=$(cat /tmp/health.json)
-            echo "summary=Relayer health check returned HTTP $code: $body" >> "$GITHUB_OUTPUT"
+            emit summary "Relayer health check returned HTTP $code: $one_line"
           else
             echo "degraded=false" >> "$GITHUB_OUTPUT"
           fi
